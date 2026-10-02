@@ -48,7 +48,7 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }}
           bin=target/${{ matrix.target }}/release/rterm
           file "$bin"
-          file "$bin" | grep -q 'statically linked'
+          file "$bin" | grep -Eq 'statically linked|static-pie linked'
           "$bin" --version
       - name: Install nfpm
         run: |
