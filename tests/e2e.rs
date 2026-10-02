@@ -21,13 +21,20 @@ use alacritty_terminal::vte::ansi::Processor;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// What the stand-in terminal does on behalf of programs: answer queries
+/// and set the clipboard (OSC 52).
 #[derive(Clone, Default)]
-struct Replies(Arc<Mutex<Vec<u8>>>);
+struct Replies {
+    pty: Arc<Mutex<Vec<u8>>>,
+    clipboard: Arc<Mutex<Vec<String>>>,
+}
 
 impl EventListener for Replies {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(s) = event {
-            self.0.lock().unwrap().extend_from_slice(s.as_bytes());
+        match event {
+            Event::PtyWrite(s) => self.pty.lock().unwrap().extend_from_slice(s.as_bytes()),
+            Event::ClipboardStore(_, text) => self.clipboard.lock().unwrap().push(text),
+            _ => {}
         }
     }
 }
@@ -108,6 +115,7 @@ impl Drop for Env {
 /// A terminal window: a PTY running rterm, rendered by an emulator.
 struct Outer {
     master: File,
+    clipboard: Arc<Mutex<Vec<String>>>,
     term: Arc<Mutex<Term<Replies>>>,
     child: Child,
     _reader: thread::JoinHandle<()>,
@@ -138,6 +146,7 @@ impl Outer {
         let master = File::from(pty.master);
 
         let replies = Replies::default();
+        let clipboard = replies.clipboard.clone();
         let config = Config {
             kitty_keyboard: true,
             scrolling_history: 100_000,
@@ -164,7 +173,7 @@ impl Outer {
                     };
                     raw.lock().unwrap().extend_from_slice(&buf[..n]);
                     parser.advance(&mut *term.lock().unwrap(), &buf[..n]);
-                    let out = std::mem::take(&mut *replies.0.lock().unwrap());
+                    let out = std::mem::take(&mut *replies.pty.lock().unwrap());
                     if !out.is_empty() {
                         let _ = wr.write_all(&out);
                     }
@@ -173,6 +182,7 @@ impl Outer {
         };
         Outer {
             master,
+            clipboard,
             term,
             child,
             _reader: reader,
@@ -843,4 +853,54 @@ fn kill_waits_for_the_session_and_ls_json() {
     assert!(!json.contains("j2") && !json.contains("unknown"), "{json}");
     env.run(&["kill", "j1"]);
     assert_eq!(env.run(&["ls", "--json"]).trim(), "[]");
+}
+
+#[test]
+fn osc52_clipboard_copies_reach_the_terminal() {
+    let env = Env::new();
+    let mut a = env.term(24, 80, &args(&["new", "clip"]));
+    a.wait_prompt();
+    // The way Codex copies: base64 text in OSC 52, written to /dev/tty,
+    // BEL-terminated; plus the ST-terminated form other programs use.
+    a.send("printf '\\033]52;c;%s\\a' \"$(printf 'copied via rterm' | base64)\" > /dev/tty\r");
+    a.wait_for("first clipboard write", |o| {
+        o.clipboard.lock().unwrap().len() == 1
+    });
+    a.send("printf '\\033]52;c;%s\\033\\\\' \"$(printf 'second copy' | base64)\"\r");
+    a.wait_for("second clipboard write", |o| {
+        o.clipboard.lock().unwrap().len() == 2
+    });
+    assert_eq!(
+        *a.clipboard.lock().unwrap(),
+        ["copied via rterm", "second copy"]
+    );
+    a.send(DETACH);
+    a.wait_exit();
+
+    // Also after reattaching (the program keeps running in between).
+    let mut b = env.term(24, 80, &["attach", "clip"]);
+    b.wait_prompt();
+    b.send("printf '\\033]52;c;%s\\a' \"$(printf 'after reattach' | base64)\"\r");
+    b.wait_for("clipboard write after reattach", |o| {
+        o.clipboard.lock().unwrap().len() == 1
+    });
+    assert_eq!(*b.clipboard.lock().unwrap(), ["after reattach"]);
+    b.send("exit\r");
+    b.wait_exit();
+}
+
+#[test]
+fn sessions_do_not_inherit_multiplexer_markers() {
+    let env = Env::new();
+    // As if rterm were started from inside tmux and screen.
+    let mut cmd = env.command(&args(&["new", "mux"]));
+    cmd.env("TMUX", "/tmp/tmux-1000/default,1234,0")
+        .env("TMUX_PANE", "%3")
+        .env("STY", "999.pts-0.host");
+    let mut a = Outer::spawn(cmd, 24, 80);
+    a.wait_prompt();
+    a.send("echo \"[${TMUX-none}][${TMUX_PANE-none}][${STY-none}]\"\r");
+    a.wait_text("[none][none][none]");
+    a.send("exit\r");
+    a.wait_exit();
 }

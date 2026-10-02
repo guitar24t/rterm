@@ -105,6 +105,13 @@ pub fn spawn_on_pty(
         .stdout(Stdio::from(pty.slave.try_clone()?))
         .stderr(Stdio::from(pty.slave))
         .current_dir(cwd);
+    // The session's terminal is rterm, wherever it was started from. Leaving
+    // tmux/screen markers in place makes programs route output for a
+    // multiplexer that isn't there: Codex, for one, sends clipboard copies
+    // to tmux (or wraps OSC 52 in tmux passthrough) instead of the terminal.
+    for var in ["TMUX", "TMUX_PANE", "STY"] {
+        cmd.env_remove(var);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
