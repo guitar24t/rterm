@@ -43,6 +43,56 @@ class ParseListing(unittest.TestCase):
         self.assertEqual(rc.parse_listing("[]"), [])
 
 
+def osc52(text, targets="c", end="\x07"):
+    import base64
+    return f"\x1b]52;{targets};{base64.b64encode(text.encode()).decode()}{end}".encode()
+
+
+class Osc52(unittest.TestCase):
+    def test_finds_copies_with_either_terminator(self):
+        sc = rc.Osc52Scanner()
+        data = b"before" + osc52("one") + b"mid\x1b[1m" + osc52("two \u00e9", end="\x1b\\") + b"after"
+        self.assertEqual(sc.feed(data), [("one", "clipboard"), ("two \u00e9", "clipboard")])
+        self.assertEqual(sc.carry, b"")
+
+    def test_split_at_every_byte(self):
+        stream = b"x" + osc52("split copy, " * 20) + b"y" + osc52("second", "p", "\x1b\\") + b"\x1b"
+        sc = rc.Osc52Scanner()
+        found = []
+        for i in range(len(stream)):
+            found += sc.feed(stream[i:i + 1])
+        self.assertEqual(found, [("split copy, " * 20, "clipboard"), ("second", "primary")])
+
+    def test_ignores_queries_cancelled_and_other_sequences(self):
+        sc = rc.Osc52Scanner()
+        data = (b"\x1b]52;c;?\x07"  # read request
+                b"\x1b]52;c;aGVsbG8\x1b[0m"  # cancelled by another escape
+                b"\x1b]2;title\x07\x1b]8;;http://x\x1b\\"  # other OSCs
+                b"\x1b]52;c;\x07"  # empty
+                + osc52("kept"))
+        self.assertEqual(sc.feed(data), [("kept", "clipboard")])
+
+    def test_long_copy_in_chunks_is_not_rescanned(self):
+        text = "x" * 3_000_000
+        stream = osc52(text, end="\x1b\\")
+        sc = rc.Osc52Scanner()
+        found = []
+        import time
+        started = time.monotonic()
+        for i in range(0, len(stream), 4095):
+            found += sc.feed(stream[i:i + 4095])
+        self.assertEqual(found, [(text, "clipboard")])
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_holds_only_a_possible_prefix(self):
+        sc = rc.Osc52Scanner()
+        self.assertEqual(sc.feed(b"plain text \x1b]5"), [])
+        self.assertEqual(sc.carry, b"\x1b]5")
+        self.assertEqual(sc.feed(b"2;c;b2s=\x07"), [("ok", "clipboard")])
+        self.assertEqual(sc.feed(b"no escapes here"), [])
+        self.assertEqual(sc.carry, b"")
+
+
 class Names(unittest.TestCase):
     def test_suggest_name(self):
         s = lambda *names: [rc.Session(n, "detached") for n in names]

@@ -130,7 +130,19 @@ impl Outer {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pty = nix::pty::openpty(Some(&ws), None).unwrap();
+        // macOS occasionally fails openpty with ENXIO while a recently closed
+        // pty is still being torn down (many tests run in parallel); retry.
+        let mut attempts = 0;
+        let pty = loop {
+            match nix::pty::openpty(Some(&ws), None) {
+                Ok(pty) => break pty,
+                Err(nix::errno::Errno::ENXIO) if attempts < 50 => {
+                    attempts += 1;
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("openpty: {e}"),
+            }
+        };
         let slave: OwnedFd = pty.slave;
         cmd.stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))

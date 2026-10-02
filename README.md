@@ -92,6 +92,23 @@ Press Enter for the suggested session, type a number or a session name, or
 host's `PATH`. Listing and attaching share one ssh connection, so you
 authenticate once.
 
+**Clipboard.** Programs on the host copy text by sending your terminal an
+OSC 52 escape sequence (Codex's copy-on-select, vim, many TUIs). Many
+terminals ignore it, including GNOME Terminal and the other VTE-based
+terminals on Ubuntu, and macOS Terminal. While attached, `rterm-connect.py`
+watches for these sequences and puts the text on your local clipboard itself,
+so copying works in any terminal; everything else passes through unchanged.
+It uses `wl-copy`, `xclip`, `xsel`, `pbcopy` or `clip.exe` if available, and
+otherwise owns the X11 selection itself (on GNOME/KDE Wayland sessions this
+goes through XWayland and is shared with Wayland apps), so nothing needs to be
+installed. `--no-clipboard` turns it off; `RTERM_CONNECT_CLIPBOARD_CMD` sets
+your own command (it receives the text on stdin); `RTERM_CONNECT_DEBUG=FILE`
+logs what was copied and how.
+
+To use your terminal's own selection while a program has captured the mouse
+(as Codex does), hold **Shift** while dragging (Option in iTerm2, Fn in macOS
+Terminal), then copy as usual.
+
 ## How it works
 
 Each session is a small background daemon that owns a pseudo-terminal and

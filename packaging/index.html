@@ -65,7 +65,7 @@ sudo apt update && sudo apt install rterm</pre><button type="button">Copy</butto
 sudo dnf install rterm</pre><button type="button">Copy</button></div>
 
   <h2>Picking a session from your laptop</h2>
-  <p><code>rterm-connect.py</code> lists the sessions on a host, lets you pick one or start a new one, and attaches over ssh. It needs only Python 3.8+ and OpenSSH on your machine.</p>
+  <p><code>rterm-connect.py</code> lists the sessions on a host, lets you pick one or start a new one, and attaches over ssh. It needs only Python 3.8+ and OpenSSH on your machine. It also brings copies made by programs on the host (like Codex's copy-on-select) to your local clipboard, even in terminals that don't support that themselves, such as GNOME Terminal.</p>
   <div class="cmd"><pre>curl -fsSLO @BASE_URL@/rterm-connect.py && chmod +x rterm-connect.py
 ./rterm-connect.py myserver</pre><button type="button">Copy</button></div>
 
