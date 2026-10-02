@@ -64,6 +64,11 @@ sudo apt update && sudo apt install rterm</pre><button type="button">Copy</butto
   <div class="cmd"><pre>sudo curl -fsSLo /etc/yum.repos.d/rterm.repo @BASE_URL@/rpm/rterm.repo
 sudo dnf install rterm</pre><button type="button">Copy</button></div>
 
+  <h2>Picking a session from your laptop</h2>
+  <p><code>rterm-connect.py</code> lists the sessions on a host, lets you pick one or start a new one, and attaches over ssh. It needs only Python 3.8+ and OpenSSH on your machine.</p>
+  <div class="cmd"><pre>curl -fsSLO @BASE_URL@/rterm-connect.py && chmod +x rterm-connect.py
+./rterm-connect.py myserver</pre><button type="button">Copy</button></div>
+
   <h2>Automatic updates</h2>
   <p><code>apt upgrade</code> and <code>dnf upgrade</code> pick up new releases. On Ubuntu, the installer also allows <code>unattended-upgrades</code> to update rterm (origin <code>rterm</code>); set <code>RTERM_NO_AUTO_UPDATE=1</code> to skip that. On RHEL, enable <code>dnf-automatic</code> if you want unattended updates.</p>
   <p>Upgrading never interrupts running sessions; sessions started before an upgrade stay attachable.</p>

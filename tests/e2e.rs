@@ -810,3 +810,37 @@ fn daemon_reports_incompatible_protocol() {
     assert_eq!(u32::from_be_bytes(reply[5..9].try_into().unwrap()), 1);
     env.run(&["kill", "proto"]);
 }
+
+#[test]
+fn kill_waits_for_the_session_and_ls_json() {
+    let env = Env::new();
+    assert!(env.run(&["ls", "--json"]).trim() == "[]");
+    env.run(&["new", "-d", "j1", "--", "/bin/sh"]);
+    // A program that ignores the hangup: kill must still finish (SIGKILL).
+    env.run(&[
+        "new",
+        "-d",
+        "j2",
+        "--",
+        "/bin/sh",
+        "-c",
+        "trap '' HUP; sleep 600",
+    ]);
+    let json = env.run(&["ls", "--json"]);
+    assert!(
+        json.starts_with("[{\"name\":\"j1\",\"status\":\"detached\""),
+        "{json}"
+    );
+    assert!(json.contains("\"name\":\"j2\""), "{json}");
+    let start = Instant::now();
+    env.run(&["kill", "j2"]);
+    assert!(
+        start.elapsed() >= Duration::from_secs(2),
+        "kill returned before the session exited"
+    );
+    // Immediately afterwards the session is gone, with no half-dead entry.
+    let json = env.run(&["ls", "--json"]);
+    assert!(!json.contains("j2") && !json.contains("unknown"), "{json}");
+    env.run(&["kill", "j1"]);
+    assert_eq!(env.run(&["ls", "--json"]).trim(), "[]");
+}

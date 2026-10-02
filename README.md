@@ -65,6 +65,33 @@ Host myserver
 or ad hoc: `ssh -t myserver rterm`. Use `ssh -t myserver rterm other` for a
 second session.
 
+### Picking a session from your laptop
+
+`contrib/rterm-connect.py` runs on your own machine: it lists the sessions on
+a host, lets you pick one (or start a new one), and attaches over ssh. It
+needs Python 3.8+ and the OpenSSH client, nothing else. Download it from
+<https://guitar24t.github.io/rterm/rterm-connect.py> or copy it from this repo.
+
+```console
+$ rterm-connect.py myserver
+rterm sessions on myserver:
+
+  1  main   detached  3h05m  120x40  vim README.md
+  2  build  attached    12m  200x50  make -j8
+
+  n  new session
+  q  quit
+
+Attach to [1]:
+```
+
+Press Enter for the suggested session, type a number or a session name, or
+`n` for a new one. Options go before the host and ssh options after it:
+`rterm-connect.py --list me@host -p 2222`, `--session NAME` to skip the menu,
+`-e '^a'` for a different detach key, `--rterm PATH` if rterm isn't on the
+host's `PATH`. Listing and attaching share one ssh connection, so you
+authenticate once.
+
 ## How it works
 
 Each session is a small background daemon that owns a pseudo-terminal and

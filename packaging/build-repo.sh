@@ -96,5 +96,6 @@ subst() {
 }
 subst "$here/install.sh" > install.sh
 subst "$here/index.html" > index.html
+install -m 0755 "$here/../contrib/rterm-connect.py" rterm-connect.py
 touch .nojekyll
 echo "built repository for rterm $version in $site (key $fingerprint)"

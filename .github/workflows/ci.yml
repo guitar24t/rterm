@@ -30,6 +30,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Test rterm-connect.py
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s contrib -v
 
   # Build, sign (with a throwaway key) and install-test the packages on
   # every change, so a release can't be the first time packaging runs.

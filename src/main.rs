@@ -91,7 +91,11 @@ enum Cmd {
     },
     /// List sessions
     #[command(visible_alias = "ls")]
-    List,
+    List {
+        /// Print the list as JSON (for scripts)
+        #[arg(long)]
+        json: bool,
+    },
     /// Detach whoever is attached to a session [default: the current one]
     #[command(visible_alias = "d")]
     Detach { name: Option<String> },
@@ -203,7 +207,7 @@ fn run(cli: Cli) -> Result<i32> {
             }
             client::attach(&name, &options)
         }
-        Some(Cmd::List) => client::ls().map(|_| 0),
+        Some(Cmd::List { json }) => client::ls(json).map(|_| 0),
         Some(Cmd::Detach { name }) => client::detach(&current_or_named(name, "detach")?).map(|_| 0),
         Some(Cmd::Kill { name }) => client::kill(&current_or_named(name, "kill")?).map(|_| 0),
         Some(Cmd::Daemon {

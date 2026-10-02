@@ -501,8 +501,12 @@ pub fn list_sessions() -> Result<Vec<Result<SessionInfo, (String, String)>>> {
     Ok(out)
 }
 
-pub fn ls() -> Result<()> {
+pub fn ls(json: bool) -> Result<()> {
     let sessions = list_sessions()?;
+    if json {
+        println!("{}", sessions_json(&sessions, sys::now_unix()));
+        return Ok(());
+    }
     if sessions.is_empty() {
         println!("no sessions");
         return Ok(());
@@ -564,6 +568,59 @@ pub fn ls() -> Result<()> {
     Ok(())
 }
 
+/// `rterm ls --json`: a stable, machine-readable listing (one array,
+/// one object per session) for scripts such as contrib/rterm-connect.py.
+fn sessions_json(sessions: &[Result<SessionInfo, (String, String)>], now: u64) -> String {
+    let items: Vec<String> = sessions
+        .iter()
+        .map(|s| match s {
+            Ok(i) => {
+                let age = now.saturating_sub(i.created);
+                format!(
+                    "{{\"name\":{},\"status\":\"{}\",\"created\":{},\"age\":{},\"age_text\":{},\
+                     \"cols\":{},\"rows\":{},\"pid\":{},\"command\":{},\"title\":{}}}",
+                    json_str(&i.name),
+                    if i.attached { "attached" } else { "detached" },
+                    i.created,
+                    age,
+                    json_str(&format_age(age)),
+                    i.cols,
+                    i.rows,
+                    i.pid,
+                    json_str(&i.command),
+                    json_str(&i.title),
+                )
+            }
+            Err((name, e)) => format!(
+                "{{\"name\":{},\"status\":\"unknown\",\"error\":{}}}",
+                json_str(name),
+                json_str(e)
+            ),
+        })
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn format_age(secs: u64) -> String {
     match secs {
         s if s < 60 => format!("{s}s"),
@@ -575,10 +632,20 @@ fn format_age(secs: u64) -> String {
 
 pub fn kill(name: &str) -> Result<()> {
     let dir = paths::ensure_socket_dir()?;
-    match request(&dir, name, &Msg::Kill)? {
-        Some(_) => Ok(()),
-        None => bail!("no session named {name:?}"),
+    if request(&dir, name, &Msg::Kill)?.is_none() {
+        bail!("no session named {name:?}");
     }
+    // Return once the session is really gone, so that a following `ls` or
+    // `new` with the same name doesn't race the exiting daemon. (It escalates
+    // to SIGKILL after a few seconds if the program ignores the hangup.)
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while matches!(connect(&dir, name)?, Connect::Connected(_)) {
+        if std::time::Instant::now() >= deadline {
+            bail!("session {name:?} is still shutting down");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 pub fn detach(name: &str) -> Result<()> {
@@ -586,5 +653,33 @@ pub fn detach(name: &str) -> Result<()> {
     match request(&dir, name, &Msg::DetachClient)? {
         Some(_) => Ok(()),
         None => bail!("no session named {name:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_listing() {
+        let info = SessionInfo {
+            name: "main".into(),
+            pid: 42,
+            created: 1000,
+            attached: true,
+            rows: 24,
+            cols: 80,
+            command: "-zsh".into(),
+            title: "say \"hi\"\\\t\u{1b}é".into(),
+        };
+        let sessions = vec![Ok(info), Err(("old".to_owned(), "bad\nthing".to_owned()))];
+        assert_eq!(
+            sessions_json(&sessions, 4723),
+            "[{\"name\":\"main\",\"status\":\"attached\",\"created\":1000,\"age\":3723,\
+             \"age_text\":\"1h02m\",\"cols\":80,\"rows\":24,\"pid\":42,\"command\":\"-zsh\",\
+             \"title\":\"say \\\"hi\\\"\\\\\\t\\u001bé\"},\
+             {\"name\":\"old\",\"status\":\"unknown\",\"error\":\"bad\\nthing\"}]"
+        );
+        assert_eq!(sessions_json(&[], 0), "[]");
     }
 }
