@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rterm packages</title>
+<meta name="description" content="apt and dnf repository for rterm, persistent terminal sessions that behave like a plain terminal.">
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1d1d1f; --muted: #6b6b70; --rule: #e4e2dd;
+    --code-bg: #f1efea; --accent: #0b6e4f; --accent-fg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --fg: #e9e8e4; --muted: #9a9aa0; --rule: #2a2a2e;
+      --code-bg: #1e1e22; --accent: #4cc39a; --accent-fg: #0d1f18;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 16px 80px; }
+  h1 { font: 600 2.4rem/1.1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h1 .v { font-size: 1rem; color: var(--muted); font-weight: 400; margin-left: 10px; letter-spacing: 0; }
+  .lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 40px; }
+  h2 { font-size: 1.05rem; margin: 40px 0 10px; padding-top: 24px; border-top: 1px solid var(--rule); }
+  p { margin: 8px 0; }
+  code, pre { font: 0.88rem/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  p code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  .cmd { position: relative; margin: 12px 0; }
+  pre {
+    background: var(--code-bg); border-radius: 8px; padding: 14px 16px; margin: 0;
+    overflow-x: auto; white-space: pre;
+  }
+  .cmd button {
+    position: absolute; top: 8px; right: 8px; border: 0; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg); font: 600 0.75rem/1 system-ui, sans-serif;
+    padding: 6px 9px; opacity: 0.9;
+  }
+  .cmd button:hover { opacity: 1; }
+  .hero pre { font-size: 0.95rem; padding: 18px 90px 18px 18px; }
+  .fpr { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; word-spacing: 0.2em; overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>rterm<span class="v">@VERSION@</span></h1>
+  <p class="lede">Persistent terminal sessions that behave like a plain terminal. Packages for Ubuntu 24.04+, Debian, and RHEL&nbsp;9 / Rocky / Alma (x86_64 and arm64).</p>
+
+  <div class="cmd hero"><pre>curl -fsSL @BASE_URL@/install.sh | sudo sh</pre><button type="button">Copy</button></div>
+  <p>The installer adds this signed repository to apt or dnf and installs <code>rterm</code>. From then on it updates with the rest of the system.</p>
+
+  <h2>Ubuntu / Debian, by hand</h2>
+  <div class="cmd"><pre>sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL @BASE_URL@/rterm.gpg | sudo tee /etc/apt/keyrings/rterm.gpg > /dev/null
+curl -fsSL @BASE_URL@/rterm.sources | sudo tee /etc/apt/sources.list.d/rterm.sources > /dev/null
+sudo apt update && sudo apt install rterm</pre><button type="button">Copy</button></div>
+
+  <h2>RHEL 9 / Rocky / Alma / Fedora, by hand</h2>
+  <div class="cmd"><pre>sudo curl -fsSLo /etc/yum.repos.d/rterm.repo @BASE_URL@/rpm/rterm.repo
+sudo dnf install rterm</pre><button type="button">Copy</button></div>
+
+  <h2>Automatic updates</h2>
+  <p><code>apt upgrade</code> and <code>dnf upgrade</code> pick up new releases. On Ubuntu, the installer also allows <code>unattended-upgrades</code> to update rterm (origin <code>rterm</code>); set <code>RTERM_NO_AUTO_UPDATE=1</code> to skip that. On RHEL, enable <code>dnf-automatic</code> if you want unattended updates.</p>
+  <p>Upgrading never interrupts running sessions; sessions started before an upgrade stay attachable.</p>
+
+  <h2>Signing key</h2>
+  <p>Packages and repository metadata are signed with <a href="@BASE_URL@/rterm.asc">this key</a>:</p>
+  <p class="fpr">@FINGERPRINT@</p>
+
+  <footer>
+    <a href="https://github.com/guitar24t/rterm">Source on GitHub</a> ·
+    <a href="https://github.com/guitar24t/rterm/releases">Releases</a> ·
+    MIT licensed
+  </footer>
+</main>
+<script>
+  for (const btn of document.querySelectorAll('.cmd button')) {
+    btn.addEventListener('click', async () => {
+      const text = btn.previousElementSibling.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied';
+      } catch {
+        btn.textContent = 'Select & copy';
+      }
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
+</script>
+</body>
+</html>

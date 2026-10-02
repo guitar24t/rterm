@@ -1,0 +1,80 @@
+# Push a tag "vX.Y.Z" (matching Cargo.toml) to publish a release: signed
+# packages on the GitHub release, and the apt/dnf repository on GitHub Pages.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches Cargo.toml
+        run: packaging/version.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+
+  packages:
+    needs: test
+    uses: ./.github/workflows/packages.yml
+    with:
+      release: true
+    secrets: inherit
+
+  publish:
+    name: Publish GitHub release
+    needs: packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: dist
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Install or update from the package repository: https://guitar24t.github.io/rterm/
+
+          \`\`\`
+          curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh
+          \`\`\`"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "rterm ${GITHUB_REF_NAME#v}" --notes "$notes" --generate-notes dist/*
+          fi
+
+  pages:
+    name: Deploy package repository
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: site
+          path: site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5

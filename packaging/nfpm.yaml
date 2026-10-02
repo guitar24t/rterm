@@ -1,0 +1,48 @@
+# Package definition for both .deb and .rpm (https://nfpm.goreleaser.com).
+# Expects VERSION and ARCH (amd64|arm64) in the environment and the binary
+# staged at target/package/rterm; see packaging/package.sh.
+name: rterm
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: 1
+section: utils
+priority: optional
+maintainer: Robert Hilton <robert.a.hilton.jr@gmail.com>
+vendor: rterm
+homepage: https://github.com/guitar24t/rterm
+license: MIT
+description: |-
+  Persistent terminal sessions that behave like a plain terminal
+  rterm keeps programs running when you disconnect and lets you reattach
+  later, while your terminal talks to them directly: native scrollback,
+  selection and copy/paste, with no terminal multiplexer in the way.
+
+contents:
+  - src: target/package/rterm
+    dst: /usr/bin/rterm
+    file_info:
+      mode: 0755
+  - src: README.md
+    dst: /usr/share/doc/rterm/README.md
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/rterm/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/licenses/rterm/LICENSE
+    packager: rpm
+    type: license
+    file_info:
+      mode: 0644
+
+rpm:
+  summary: Persistent terminal sessions that behave like a plain terminal
+  group: Applications/System
+  compression: xz
+
+deb:
+  compression: xz

@@ -1,0 +1,179 @@
+# Builds static binaries, packages them as .deb/.rpm, signs everything,
+# assembles the apt + dnf repository site, and installs from that site on
+# every supported distro and architecture.
+name: Packages
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: Sign with the release key and include packages from earlier releases.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  NFPM_VERSION: 2.47.0
+  PAGES_URL: https://guitar24t.github.io/rterm
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            nfpm_asset: Linux_x86_64
+            nfpm_sha256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            nfpm_asset: Linux_arm64
+            nfpm_sha256: 1c0f5f2999b9a974bfb04fdb0cc3306096de530ac5dbb25d739cc5f5219c919c
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build static binary
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          bin=target/${{ matrix.target }}/release/rterm
+          file "$bin"
+          file "$bin" | grep -q 'statically linked'
+          "$bin" --version
+      - name: Install nfpm
+        run: |
+          curl -fsSL -o nfpm.tgz "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.nfpm_asset }}.tar.gz"
+          echo "${{ matrix.nfpm_sha256 }}  nfpm.tgz" | sha256sum -c -
+          sudo tar -C /usr/local/bin -xzf nfpm.tgz nfpm
+      - name: Package
+        run: packaging/package.sh target/${{ matrix.target }}/release/rterm ${{ matrix.arch }} dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  repo:
+    name: Sign and build repository
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: unsigned-*
+          path: dist
+          merge-multiple: true
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c rpm gnupg
+      - name: Import signing key
+        env:
+          RELEASE: ${{ inputs.release }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          if [[ "$RELEASE" == true ]]; then
+            if [[ -z "$GPG_PRIVATE_KEY" ]]; then
+              echo "::error::The GPG_PRIVATE_KEY secret is not set"
+              exit 1
+            fi
+            printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/passphrase"
+            echo "GPG_PASSPHRASE_FILE=$RUNNER_TEMP/passphrase" >> "$GITHUB_ENV"
+            gpg --batch --pinentry-mode loopback --passphrase-file "$RUNNER_TEMP/passphrase" \
+              --import <<< "$GPG_PRIVATE_KEY"
+            want=$(gpg --with-colons --show-keys packaging/rterm-signing-key.asc | awk -F: '/^fpr/ {print $10; exit}')
+            have=$(gpg --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')
+            if [[ "$want" != "$have" ]]; then
+              echo "::error::Secret key $have does not match packaging/rterm-signing-key.asc ($want)"
+              exit 1
+            fi
+          else
+            # Not a release: a throwaway key still exercises every signature check.
+            gpg --batch --pinentry-mode loopback --passphrase '' \
+              --quick-gen-key "rterm CI throwaway key" rsa4096 sign never
+            have=$(gpg --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')
+          fi
+          echo "SIGNING_KEY=$have" >> "$GITHUB_ENV"
+      - name: Fetch packages from earlier releases
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p previous
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 --exclude-drafts \
+                         --json tagName --jq '.[].tagName'); do
+            [[ "$tag" == "$GITHUB_REF_NAME" ]] && continue
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "previous/$tag" \
+              --pattern '*.deb' --pattern '*.rpm'
+          done
+          find previous -type f | sort
+      - name: Sign packages and checksums
+        run: |
+          packaging/sign-rpms.sh dist/*.rpm
+          (cd dist && sha256sum -- *.deb *.rpm *.tar.gz > SHA256SUMS)
+          sign=(gpg --batch --yes --local-user "$SIGNING_KEY" --digest-algo SHA512)
+          if [[ -n "${GPG_PASSPHRASE_FILE:-}" ]]; then
+            sign+=(--pinentry-mode loopback --passphrase-file "$GPG_PASSPHRASE_FILE")
+          fi
+          "${sign[@]}" --armor --detach-sign --output dist/SHA256SUMS.asc dist/SHA256SUMS
+          ls -l dist
+      - name: Build repository site
+        env:
+          BASE_URL: ${{ env.PAGES_URL }}
+        run: |
+          mkdir -p all
+          cp dist/*.deb dist/*.rpm all/
+          if [[ -d previous ]]; then cp -r previous all/; fi
+          packaging/build-repo.sh all site
+      - name: Remove key material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gnupg" "$RUNNER_TEMP/passphrase"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: site
+          path: site/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  install-test:
+    name: Install on ${{ matrix.image }} (${{ matrix.runner == 'ubuntu-24.04' && 'x86_64' || 'aarch64' }})
+    needs: repo
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        image:
+          - ubuntu:24.04
+          - ubuntu:26.04
+          - registry.access.redhat.com/ubi9/ubi:latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: site
+          path: site
+      - name: Install from the repository and smoke-test
+        run: |
+          docker run --rm -v "$PWD/site:/repo:ro" -v "$PWD/packaging:/tests:ro" \
+            "${{ matrix.image }}" bash /tests/test-install.sh /repo
