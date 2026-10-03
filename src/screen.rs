@@ -565,6 +565,7 @@ impl Screen {
     }
 
     /// Kitty keyboard flags in effect on the active screen.
+    #[cfg(unix)]
     pub fn kitty_flags(&self) -> u16 {
         let k = &self.extra.kitty[self.extra.alt as usize];
         k.entries.last().copied().unwrap_or(k.base)

@@ -1,6 +1,7 @@
 //! Where session sockets live and how sessions are named.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -10,17 +11,30 @@ pub const DEFAULT_SESSION: &str = "main";
 
 /// The per-user runtime directory holding session sockets.
 ///
-/// `$XDG_RUNTIME_DIR` is deliberately avoided: systemd-logind deletes it when
-/// the user's last login session ends, which would orphan every detached
-/// session. Like tmux, we use a private directory under /tmp instead.
+/// On Unix, `$XDG_RUNTIME_DIR` is deliberately avoided: systemd-logind
+/// deletes it when the user's last login session ends, which would orphan
+/// every detached session. Like tmux, we use a private directory under /tmp.
+/// On Windows it lives in the user's (private) local application data.
 pub fn socket_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("RTERM_SOCKET_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
     }
-    PathBuf::from(format!("/tmp/rterm-{}", nix::unistd::getuid()))
+    #[cfg(unix)]
+    {
+        PathBuf::from(format!("/tmp/rterm-{}", nix::unistd::getuid()))
+    }
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        base.join("rterm")
+    }
 }
 
 /// Create the socket directory if needed and verify nobody else controls it.
+#[cfg(unix)]
 pub fn ensure_socket_dir() -> Result<PathBuf> {
     let dir = socket_dir();
     match fs::DirBuilder::new().mode(0o700).create(&dir) {
@@ -42,6 +56,15 @@ pub fn ensure_socket_dir() -> Result<PathBuf> {
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
             .with_context(|| format!("restricting permissions on {}", dir.display()))?;
     }
+    Ok(dir)
+}
+
+/// Create the socket directory if needed. Under the user's profile it is
+/// already private to them.
+#[cfg(windows)]
+pub fn ensure_socket_dir() -> Result<PathBuf> {
+    let dir = socket_dir();
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     Ok(dir)
 }
 
@@ -73,6 +96,7 @@ pub fn log_path(dir: &Path, name: &str) -> PathBuf {
 
 /// Stable path handed to the session as `SSH_AUTH_SOCK`; it is re-pointed at
 /// the agent socket of whichever ssh connection attached most recently.
+#[cfg(unix)]
 pub fn agent_link_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.agent"))
 }
