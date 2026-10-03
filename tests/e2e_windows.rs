@@ -489,3 +489,50 @@ fn rterm_connect_name_runs_the_session_picker() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("Choose an rterm session"), "{text}");
 }
+
+#[test]
+fn powershell_session_round_trip() {
+    let env = Env::new();
+    let mut a = env.term(
+        24,
+        100,
+        &["new", "ps", "--", "powershell.exe", "-NoLogo", "-NoProfile"],
+    );
+    a.wait_text("PS ");
+    a.send("Write-Output ('ps-' + 'marker')\r");
+    a.wait_line("ps-marker");
+    a.send(DETACH);
+    assert_eq!(a.wait_exit(), 0);
+    assert!(
+        a.screen().contains("detached from session 'ps'"),
+        "{}",
+        a.screen()
+    );
+
+    let mut b = env.term(24, 100, &["attach", "ps"]);
+    b.wait_line("ps-marker");
+    b.send("exit\r");
+    assert_eq!(b.wait_exit(), 0);
+}
+
+#[test]
+fn default_shell_is_powershell_or_the_openssh_default() {
+    let env = Env::new();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_rterm"));
+    cmd.args(["new", "-d", "dflt"])
+        .envs(env.vars())
+        .env_remove("RTERM_SHELL")
+        .env_remove("RTERM_SESSION")
+        .stdin(Stdio::null());
+    let out = cmd.output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("created session 'dflt'"));
+    let json = env.run(&["ls", "--json"]);
+    let lower = json.to_lowercase();
+    assert!(
+        lower.contains("\"command\":\"pwsh.exe\"")
+            || lower.contains("\"command\":\"powershell.exe\"")
+            || lower.contains("\"command\":\"cmd.exe\""),
+        "{json}"
+    );
+    env.run(&["kill", "dflt"]);
+}
