@@ -560,10 +560,9 @@ def choose(sessions: List[Session], host: str, style: Style) -> str:
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="rterm-connect.py",
         description="Choose an rterm session on a remote host and attach to it.",
         epilog="Options for this script go before HOST; anything after HOST is "
-               "passed to ssh, e.g. 'rterm-connect.py me@host -p 2222'. "
+               "passed to ssh, e.g. '%(prog)s me@host -p 2222'. "
                "Detach with Ctrl-\\ as usual.",
     )
     parser.add_argument("--list", action="store_true",

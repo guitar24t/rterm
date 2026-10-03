@@ -26,12 +26,22 @@ curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh
 This adds rterm's signed apt/dnf repository and installs the package, so
 `apt upgrade` / `dnf upgrade` (and, on Ubuntu, unattended-upgrades) keep it
 current. Manual repository setup and the signing key fingerprint are on
-<https://guitar24t.github.io/rterm/>. Each
-[GitHub release](https://github.com/guitar24t/rterm/releases) also carries the
-.deb/.rpm packages and static binaries.
+<https://guitar24t.github.io/rterm/>.
 
-Install it on the machine where the sessions should live (usually the remote
-server). To build from source instead (Linux or macOS): `cargo install --path .`
+On macOS (Apple Silicon or Intel, macOS 11+), with [Homebrew](https://brew.sh):
+
+```sh
+brew install guitar24t/tap/rterm
+```
+
+`brew upgrade` picks up new releases.
+
+Every package installs both `rterm` and `rterm-connect` (the session picker
+below, which needs Python 3). Install rterm on the machine where the sessions
+should live, usually a server; on your own computer you mostly use
+`rterm-connect`. Each [GitHub release](https://github.com/guitar24t/rterm/releases)
+also carries the .deb/.rpm packages and Linux and macOS tarballs. To build from
+source instead: `cargo install --path .`
 
 ## Use
 
@@ -67,13 +77,15 @@ second session.
 
 ### Picking a session from your laptop
 
-`contrib/rterm-connect.py` runs on your own machine: it lists the sessions on
-a host, lets you pick one (or start a new one), and attaches over ssh. It
-needs Python 3.8+ and the OpenSSH client, nothing else. Download it from
-<https://guitar24t.github.io/rterm/rterm-connect.py> or copy it from this repo.
+`rterm-connect` runs on your own machine: it lists the sessions on a host,
+lets you pick one (or start a new one), and attaches over ssh. It needs Python
+3.8+ and the OpenSSH client, nothing else. It comes with every rterm package;
+you can also download it on its own from
+<https://guitar24t.github.io/rterm/rterm-connect.py> (it's
+`contrib/rterm-connect.py` in this repo).
 
 ```console
-$ rterm-connect.py myserver
+$ rterm-connect myserver
 rterm sessions on myserver:
 
   1  main   detached  3h05m  120x40  vim README.md
@@ -87,7 +99,7 @@ Attach to [1]:
 
 Press Enter for the suggested session, type a number or a session name, or
 `n` for a new one. Options go before the host and ssh options after it:
-`rterm-connect.py --list me@host -p 2222`, `--session NAME` to skip the menu,
+`rterm-connect --list me@host -p 2222`, `--session NAME` to skip the menu,
 `-e '^a'` for a different detach key, `--rterm PATH` if rterm isn't on the
 host's `PATH`. Listing and attaching share one ssh connection, so you
 authenticate once.
@@ -95,7 +107,7 @@ authenticate once.
 **Clipboard.** Programs on the host copy text by sending your terminal an
 OSC 52 escape sequence (Codex's copy-on-select, vim, many TUIs). Many
 terminals ignore it, including GNOME Terminal and the other VTE-based
-terminals on Ubuntu, and macOS Terminal. While attached, `rterm-connect.py`
+terminals on Ubuntu, and macOS Terminal. While attached, `rterm-connect`
 watches for these sequences and puts the text on your local clipboard itself,
 so copying works in any terminal; everything else passes through unchanged.
 It uses `wl-copy`, `xclip`, `xsel`, `pbcopy` or `clip.exe` if available, and
@@ -178,12 +190,14 @@ Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The Release workflow runs the tests, builds static x86_64 and arm64 binaries,
-packages and signs them, installs them from the freshly built repository on
-Ubuntu 24.04, Ubuntu 26.04 and RHEL 9 (both architectures), and only then
-publishes the GitHub release and updates the apt/dnf repository on GitHub
-Pages. Every push to `main` runs the same packaging and install tests with a
-throwaway key.
+The Release workflow runs the tests, builds static x86_64 and arm64 Linux
+binaries and a universal macOS binary, packages and signs them, installs them
+from the freshly built repository on Ubuntu 24.04, Ubuntu 26.04 and RHEL 9
+(both architectures) and through Homebrew on macOS, and only then publishes
+the GitHub release, updates the apt/dnf repository on GitHub Pages and pushes
+the new formula to [guitar24t/homebrew-tap](https://github.com/guitar24t/homebrew-tap)
+(through the `HOMEBREW_TAP_DEPLOY_KEY` deploy key). Every push to `main` runs
+the same packaging and install tests with a throwaway key.
 
 Packages are signed with the key in `packaging/rterm-signing-key.asc`; its
 private half lives in the `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` repository

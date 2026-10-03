@@ -21,6 +21,7 @@ esac
 stage=$(mktemp -d)
 mkdir "$stage/rterm-$version"
 cp "$binary" "$stage/rterm-$version/rterm"
+install -m 0755 contrib/rterm-connect.py "$stage/rterm-$version/rterm-connect"
 cp README.md LICENSE "$stage/rterm-$version/"
 tar -C "$stage" -czf "$out/rterm-$version-$triple.tar.gz" "rterm-$version"
 rm -rf "$stage"

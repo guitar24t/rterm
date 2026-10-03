@@ -63,9 +63,62 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  macos:
+    name: Build macOS (universal)
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Package universal binary
+        run: |
+          packaging/package-macos.sh dist \
+            target/aarch64-apple-darwin/release/rterm target/x86_64-apple-darwin/release/rterm
+      - name: Run both slices
+        run: |
+          mkdir check && tar -C check -xzf dist/rterm-*-macos-universal.tar.gz
+          bin=$(echo check/rterm-*/rterm)
+          lipo -verify_arch arm64 x86_64 "$bin"
+          vtool -show-build "$bin" | grep -E 'minos'
+          arch -arm64 "$bin" --version
+          if ! arch -x86_64 /usr/bin/true 2> /dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 "$bin" --version
+      - name: Install through Homebrew from a local tap
+        run: |
+          brew tap-new --no-git local/rterm-ci
+          tarball=$(echo "$PWD"/dist/rterm-*-macos-universal.tar.gz)
+          packaging/render-formula.sh "$tarball" "file://$tarball" \
+            > "$(brew --repository local/rterm-ci)/Formula/rterm.rb"
+          brew install --formula local/rterm-ci/rterm
+          brew test local/rterm-ci/rterm
+          rterm --version
+          rterm-connect --help > /dev/null
+          rterm new -d smoke -- sleep 60
+          rterm ls | grep -q '^smoke '
+          rterm kill smoke
+          brew uninstall --formula local/rterm-ci/rterm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-macos
+          path: dist/
+          if-no-files-found: error
+
   repo:
     name: Sign and build repository
-    needs: build
+    needs: [build, macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

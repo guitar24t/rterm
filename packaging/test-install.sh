@@ -18,6 +18,7 @@ fi
 RTERM_REPO_URL="file://$site" sh "$site/install.sh"
 
 [[ "$(rterm --version)" == "rterm $expected" ]]
+rterm-connect --help | grep -q 'Choose an rterm session'  # needs python3 (recommended)
 if command -v dpkg-query > /dev/null; then
   [[ "$(dpkg-query -W -f '${Version}' rterm)" == "$expected-1" ]]
   apt-cache policy rterm
@@ -51,4 +52,5 @@ else
   dnf remove -y -q rterm
 fi
 ! command -v rterm
+! command -v rterm-connect
 echo "=== OK: $PRETTY_NAME on $(uname -m)"

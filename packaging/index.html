@@ -49,10 +49,14 @@
 <body>
 <main>
   <h1>rterm<span class="v">@VERSION@</span></h1>
-  <p class="lede">Persistent terminal sessions that behave like a plain terminal. Packages for Ubuntu 24.04+, Debian, and RHEL&nbsp;9 / Rocky / Alma (x86_64 and arm64).</p>
+  <p class="lede">Persistent terminal sessions that behave like a plain terminal. Packages for Ubuntu 24.04+, Debian, and RHEL&nbsp;9 / Rocky / Alma (x86_64 and arm64), and for macOS through Homebrew.</p>
 
   <div class="cmd hero"><pre>curl -fsSL @BASE_URL@/install.sh | sudo sh</pre><button type="button">Copy</button></div>
   <p>The installer adds this signed repository to apt or dnf and installs <code>rterm</code>. From then on it updates with the rest of the system.</p>
+
+  <h2>macOS</h2>
+  <div class="cmd"><pre>brew install guitar24t/tap/rterm</pre><button type="button">Copy</button></div>
+  <p>A universal binary for Apple Silicon and Intel Macs (macOS 11+). <code>brew upgrade</code> picks up new releases.</p>
 
   <h2>Ubuntu / Debian, by hand</h2>
   <div class="cmd"><pre>sudo install -d -m 0755 /etc/apt/keyrings
@@ -65,7 +69,9 @@ sudo apt update && sudo apt install rterm</pre><button type="button">Copy</butto
 sudo dnf install rterm</pre><button type="button">Copy</button></div>
 
   <h2>Picking a session from your laptop</h2>
-  <p><code>rterm-connect.py</code> lists the sessions on a host, lets you pick one or start a new one, and attaches over ssh. It needs only Python 3.8+ and OpenSSH on your machine. It also brings copies made by programs on the host (like Codex's copy-on-select) to your local clipboard, even in terminals that don't support that themselves, such as GNOME Terminal.</p>
+  <p><code>rterm-connect</code> lists the sessions on a host, lets you pick one or start a new one, and attaches over ssh. It also brings copies made by programs on the host (like Codex's copy-on-select) to your local clipboard, even in terminals that don't support that themselves, such as GNOME Terminal. It comes with every package above:</p>
+  <div class="cmd"><pre>rterm-connect myserver</pre><button type="button">Copy</button></div>
+  <p>Or download just the script (Python 3.8+ and OpenSSH, nothing else):</p>
   <div class="cmd"><pre>curl -fsSLO @BASE_URL@/rterm-connect.py && chmod +x rterm-connect.py
 ./rterm-connect.py myserver</pre><button type="button">Copy</button></div>
 

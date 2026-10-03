@@ -23,6 +23,10 @@ contents:
     dst: /usr/bin/rterm
     file_info:
       mode: 0755
+  - src: contrib/rterm-connect.py
+    dst: /usr/bin/rterm-connect
+    file_info:
+      mode: 0755
   - src: README.md
     dst: /usr/share/doc/rterm/README.md
     file_info:
@@ -38,6 +42,10 @@ contents:
     type: license
     file_info:
       mode: 0644
+
+# rterm-connect (the client-side session picker) is a Python 3 script.
+recommends:
+  - python3
 
 rpm:
   summary: Persistent terminal sessions that behave like a plain terminal

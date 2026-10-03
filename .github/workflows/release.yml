@@ -58,6 +58,60 @@ jobs:
               --title "rterm ${GITHUB_REF_NAME#v}" --notes "$notes" --generate-notes dist/*
           fi
 
+  homebrew:
+    name: Update Homebrew tap
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: dist
+      - name: Publish the formula to guitar24t/homebrew-tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          tarball=dist/rterm-$version-macos-universal.tar.gz
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$(basename "$tarball")"
+          if [[ -z "$DEPLOY_KEY" ]]; then
+            echo "::error::The HOMEBREW_TAP_DEPLOY_KEY secret is not set"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:guitar24t/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          packaging/render-formula.sh "$tarball" "$url" > tap/Formula/rterm.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/rterm.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+          else
+            git commit -m "rterm $version"
+            git push
+          fi
+          rm -f "$key"
+
+  verify-homebrew:
+    name: Install from the Homebrew tap
+    needs: homebrew
+    runs-on: macos-latest
+    steps:
+      - name: brew install guitar24t/tap/rterm
+        env:
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install guitar24t/tap/rterm
+          [[ "$(rterm --version)" == "rterm ${GITHUB_REF_NAME#v}" ]]
+          rterm-connect --help > /dev/null
+          brew test guitar24t/tap/rterm
+
   pages:
     name: Deploy package repository
     needs: publish
