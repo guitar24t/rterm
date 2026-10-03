@@ -61,9 +61,9 @@ fonts, tabs and splits.
    programs had switched on, so it looks as if you never left.
 3. **Never in the way.** No prefix key, no status bar, no configuration file.
    One detach key (Ctrl-\\), which you can change or switch off.
-4. **Boring to operate.** One static binary, signed packages for Linux and a
-   Homebrew formula for macOS, and automatic updates that never interrupt a
-   running session.
+4. **Boring to operate.** One binary, signed packages for Linux, a Homebrew
+   formula for macOS and an installer for Windows, and updates that never
+   interrupt a running session.
 
 ### What it deliberately isn't
 
@@ -125,11 +125,27 @@ brew install guitar24t/tap/rterm
 A universal binary from the [Homebrew tap](https://github.com/guitar24t/homebrew-tap).
 `brew upgrade` picks up new releases.
 
+### Windows (x86_64 and arm64, Windows 10 1809 or later)
+
+Download `rterm-<version>-windows-x86_64.msi` (or `-aarch64.msi` on ARM PCs)
+from the [latest release](https://github.com/guitar24t/rterm/releases/latest)
+and run it. It installs for your user only, so it needs no administrator
+rights, into `%LOCALAPPDATA%\Programs\Rob Terminal`, and adds that folder to
+your PATH; open a new terminal and `rterm` and `rterm-connect` are there. It
+appears in Settings → Apps for uninstalling.
+
+The installer isn't code-signed yet, so Windows SmartScreen may say "Windows
+protected your PC" the first time; choose **More info → Run anyway**. Windows
+installs don't update themselves yet: to upgrade, run the newer MSI over the
+old one. Sessions that are running keep running through an upgrade.
+
+A portable `.zip` with the same two programs is attached to each release too.
+
 ### Other options
 
 Every [GitHub release](https://github.com/guitar24t/rterm/releases) carries the
-.deb and .rpm packages, static Linux tarballs, the macOS tarball, and signed
-checksums. To build from source with a Rust toolchain:
+.deb and .rpm packages, static Linux tarballs, the macOS tarball, the Windows
+MSI and zip, and signed checksums. To build from source with a Rust toolchain:
 
 ```sh
 cargo install --path .
@@ -178,7 +194,9 @@ session's current width and height, and `TITLE` is the window title the
 program set (or the command, if it set none).
 
 A new session starts your login shell, in the directory you ran `rterm` from,
-with the environment of the terminal that created it.
+with the environment of the terminal that created it. On Windows it starts
+`RTERM_SHELL` if you set it, otherwise the default shell configured for
+OpenSSH (as an ssh login would get), otherwise PowerShell, otherwise cmd.
 
 ### Leaving and coming back
 
@@ -323,8 +341,12 @@ Press Enter for the suggestion (the first detached session), type a number or
 a session name, `n` for a new session, or `q` to quit. Typing a name that
 doesn't exist offers to create it.
 
-It comes with every Rob Terminal package. On a machine without one, download
-just the script; all it needs is Python 3.8+ and the OpenSSH client:
+It comes with every Rob Terminal package. On Windows it is a native program
+(no Python needed) that uses Windows' built-in OpenSSH client; Windows
+Terminal handles program copies to the clipboard itself, and Windows' ssh
+can't share connections, so a password login asks twice there. On a Linux or
+macOS machine without a package, download just the script; all it needs is
+Python 3.8+ and the OpenSSH client:
 
 ```sh
 curl -fsSLO https://guitar24t.github.io/rterm/rterm-connect.py && chmod +x rterm-connect.py
@@ -398,7 +420,8 @@ Options for attaching and creating:
 |---|---|---|
 | `RTERM_DETACH_KEY` | your shell | Default for `-e` |
 | `RTERM_SCROLLBACK` | your shell | Default for `--scrollback` |
-| `RTERM_SOCKET_DIR` | your shell | Where sessions live (default `/tmp/rterm-$UID`) |
+| `RTERM_SOCKET_DIR` | your shell | Where sessions live (default `/tmp/rterm-$UID`, on Windows `%LOCALAPPDATA%\rterm`) |
+| `RTERM_SHELL` | your shell (Windows) | Program new sessions start instead of the default shell |
 | `RTERM_SESSION` | set inside sessions | The session's name |
 | `SSH_AUTH_SOCK` | set inside sessions | Follows the most recently attached ssh agent |
 | `RTERM_NO_AUTO_UPDATE=1` | installer | Don't enable unattended upgrades on Ubuntu |
@@ -451,6 +474,21 @@ session's main process.
   them alone. A daemon that crashes leaves its error output in
   `/tmp/rterm-$UID/NAME.log`.
 
+### On Windows
+
+The same design runs on Windows with Windows' own building blocks: the
+session's program runs on a pseudo console (ConPTY), sessions live in
+`%LOCALAPPDATA%\rterm`, and the daemon leaves the job object that Windows
+OpenSSH uses to end a connection's processes, so sessions outlive the ssh
+connection that started them. Each daemon runs from its own copy of
+`rterm.exe`, which is why an upgrade can replace the installed program while
+sessions are running.
+
+ConPTY is itself a terminal emulator that redraws the program's screen for
+the terminal attached to it, so on Windows the bytes your terminal receives
+are ConPTY's rendering rather than the program's own output, exactly as in an
+ssh login to a Windows machine. Scrolling, selection and copying stay native.
+
 ### Updates and running sessions
 
 Package updates never interrupt running sessions: each session keeps running
@@ -488,6 +526,9 @@ or turn it off with `-e none`.
 the `TERM` of the terminal that created it, as an ssh login would. Start a new
 session from the new terminal.
 
+**Windows says "Windows protected your PC" when I run the MSI.** The
+installer isn't code-signed yet. Choose **More info → Run anyway**.
+
 **My terminal is in a strange state after rterm was killed.** If the `rterm`
 client is killed forcibly (`kill -9`), it can't switch the session's modes
 off. Run `reset`.
@@ -502,13 +543,14 @@ off. Run `reset`.
 - History beyond the scrollback limit (`--scrollback`, 10,000 lines by
   default) isn't kept for replay.
 - Sessions don't survive a reboot of the machine they run on.
+- On Windows, the installer isn't code-signed and doesn't update itself yet.
 
 ---
 
 ## Development
 
 ```sh
-cargo test                                            # unit and end-to-end tests
+cargo test                                            # unit and end-to-end tests (Unix or Windows)
 python3 -m unittest discover -s contrib               # rterm-connect tests
 RTERM_E2E_APP='vim -u NONE' cargo test --test e2e real_app -- --ignored --nocapture
 ```
@@ -527,9 +569,11 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 The Release workflow runs the tests, builds static x86_64 and arm64 Linux
-binaries and a universal macOS binary, packages and signs them, installs them
-from the freshly built repository on Ubuntu 24.04, Ubuntu 26.04 and RHEL 9
-(both architectures) and through Homebrew on macOS, and only then publishes
+binaries, a universal macOS binary and x64 and arm64 Windows binaries,
+packages and signs them, installs them from the freshly built repository on
+Ubuntu 24.04, Ubuntu 26.04 and RHEL 9 (both architectures), through Homebrew
+on macOS and from the MSI on Windows (including an upgrade while a session
+runs), and only then publishes
 the GitHub release, updates the apt/dnf repository on GitHub Pages and pushes
 the new formula to [guitar24t/homebrew-tap](https://github.com/guitar24t/homebrew-tap)
 (through the `HOMEBREW_TAP_DEPLOY_KEY` deploy key). Every push to `main` runs
