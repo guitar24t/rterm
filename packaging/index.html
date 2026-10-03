@@ -49,7 +49,7 @@
 <body>
 <main>
   <h1>rterm<span class="v">@VERSION@</span></h1>
-  <p class="lede">Persistent terminal sessions that behave like a plain terminal. Packages for Ubuntu 24.04+, Debian, and RHEL&nbsp;9 / Rocky / Alma (x86_64 and arm64), and for macOS through Homebrew.</p>
+  <p class="lede">Persistent terminal sessions that behave like a plain terminal. Packages for Ubuntu 24.04+, Debian, and RHEL&nbsp;9 / Rocky / Alma (x86_64 and arm64), for macOS through Homebrew, and for Windows.</p>
 
   <div class="cmd hero"><pre>curl -fsSL @BASE_URL@/install.sh | sudo sh</pre><button type="button">Copy</button></div>
   <p>The installer adds this signed repository to apt or dnf and installs <code>rterm</code>. From then on it updates with the rest of the system.</p>
@@ -57,6 +57,9 @@
   <h2>macOS</h2>
   <div class="cmd"><pre>brew install guitar24t/tap/rterm</pre><button type="button">Copy</button></div>
   <p>A universal binary for Apple Silicon and Intel Macs (macOS 11+). <code>brew upgrade</code> picks up new releases.</p>
+
+  <h2>Windows</h2>
+  <p>Download the <code>.msi</code> for your PC (x86_64 or aarch64) from the <a href="https://github.com/guitar24t/rterm/releases/latest">latest release</a> and run it. It installs for your user only (no administrator rights) and adds <code>rterm</code> and <code>rterm-connect</code> to your PATH. The installer isn't code-signed yet, so SmartScreen may ask you to choose <em>More info → Run anyway</em>. To upgrade, run the newer MSI; running sessions keep running.</p>
 
   <h2>Ubuntu / Debian, by hand</h2>
   <div class="cmd"><pre>sudo install -d -m 0755 /etc/apt/keyrings
