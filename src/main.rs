@@ -6,12 +6,22 @@
 //! keyboard protocols all behave as in a plain ssh session.
 
 mod client;
+mod connect;
+#[cfg(unix)]
 mod daemon;
+#[cfg(windows)]
+#[path = "daemon_windows.rs"]
+mod daemon;
+mod ipc;
 mod keys;
 mod paths;
 mod protocol;
 mod screen;
+#[cfg(unix)]
 mod sys;
+mod util;
+#[cfg(windows)]
+mod winsys;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -24,6 +34,14 @@ use crate::keys::{DEFAULT_DETACH_KEY, DetachKey};
 use crate::protocol::WinSize;
 
 const DEFAULT_SCROLLBACK: usize = 10_000;
+
+/// What `rterm __daemon` is started with (see client::create_session).
+pub struct DaemonArgs {
+    pub name: String,
+    pub size: WinSize,
+    pub scrollback: usize,
+    pub command: Vec<OsString>,
+}
 
 #[derive(Parser)]
 #[command(
@@ -220,7 +238,7 @@ fn run(cli: Cli) -> Result<i32> {
             command,
         }) => {
             paths::validate_name(&name)?;
-            daemon::run(daemon::DaemonArgs {
+            daemon::run(DaemonArgs {
                 name,
                 size: WinSize {
                     rows,
@@ -237,6 +255,20 @@ fn run(cli: Cli) -> Result<i32> {
 }
 
 fn main() -> ExitCode {
+    // Installed under the name rterm-connect (Windows), act as the session
+    // picker; contrib/rterm-connect.py is the same tool for Linux and macOS.
+    let mut args = std::env::args_os();
+    let invoked_as = args
+        .next()
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_lowercase())
+        })
+        .unwrap_or_default();
+    if invoked_as == "rterm-connect" {
+        return ExitCode::from(connect::main(args.collect()).clamp(0, 255) as u8);
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),

@@ -1,6 +1,8 @@
 //! End-to-end tests: run the real `rterm` binary on a PTY whose other end is
 //! an in-memory terminal emulator standing in for the user's terminal.
 
+#![cfg(unix)]
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};

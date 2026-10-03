@@ -10,7 +10,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +23,8 @@ use nix::sys::signal::{Signal, kill, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
+use crate::DaemonArgs;
+use crate::ipc::Listener;
 use crate::paths;
 use crate::protocol::{self, FrameReader, Msg, SessionInfo, WinSize};
 use crate::screen::{Screen, clamp_size};
@@ -38,13 +40,6 @@ const READ_BUDGET: usize = 512 << 10;
 const HEALTH_INTERVAL: Duration = Duration::from_secs(60);
 const TOUCH_INTERVAL: Duration = Duration::from_secs(3600);
 const KILL_GRACE: Duration = Duration::from_secs(3);
-
-pub struct DaemonArgs {
-    pub name: String,
-    pub size: WinSize,
-    pub scrollback: usize,
-    pub command: Vec<OsString>,
-}
 
 struct Conn {
     sock: UnixStream,
@@ -121,7 +116,7 @@ struct Daemon {
     dir: PathBuf,
     sock_path: PathBuf,
     sock_ino: u64,
-    listener: UnixListener,
+    listener: Listener,
     lock_path: PathBuf,
     _lock: Flock<File>,
     agent_link: Option<PathBuf>,
@@ -258,7 +253,7 @@ impl Daemon {
             conns: Vec::new(),
             sig_read,
             term_requested,
-            created: sys::now_unix(),
+            created: crate::util::now_unix(),
             command,
             last_health: Instant::now(),
             last_touch: Instant::now(),
@@ -653,9 +648,8 @@ fn close_inherited_fds() {
     }
 }
 
-fn bind(path: &Path) -> Result<UnixListener> {
-    let listener =
-        UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
+fn bind(path: &Path) -> Result<Listener> {
+    let listener = Listener::bind(path).with_context(|| format!("binding {}", path.display()))?;
     listener.set_nonblocking(true)?;
     sys::set_cloexec(listener.as_fd())?;
     Ok(listener)
