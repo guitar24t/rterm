@@ -23,6 +23,8 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $msi = Join-Path $Out "rterm-$Version-windows-$label.msi"
 wix build -arch $Arch -d "Version=$Version" -d "BinDir=$stage" -o $msi (Join-Path $PSScriptRoot 'rterm.wxs')
 if ($LASTEXITCODE -ne 0) { throw "wix build failed ($LASTEXITCODE)" }
+# WiX also writes debug symbols next to the MSI; they aren't for users.
+Remove-Item -Force ([IO.Path]::ChangeExtension($msi, '.wixpdb')) -ErrorAction SilentlyContinue
 
 $zip = Join-Path $Out "rterm-$Version-windows-$label.zip"
 Remove-Item -Force $zip -ErrorAction SilentlyContinue
