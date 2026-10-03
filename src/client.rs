@@ -83,15 +83,15 @@ pub fn create_session(
         args.push("--".into());
         args.extend(command.iter().cloned());
     }
-    let mut child = platform::spawn_daemon(&args, log)?;
+    let mut daemon = platform::spawn_daemon(&args, log)?;
     let mut status = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut status)?;
+    daemon.status.read_to_string(&mut status)?;
     let status = status.trim();
     match status {
         "ok" => Ok(()),
         s if s.ends_with("already exists") => Ok(()), // lost a creation race
         "" => {
-            let _ = child.wait();
+            (daemon.reap)();
             let log = fs::read_to_string(paths::log_path(dir, name)).unwrap_or_default();
             bail!(
                 "session daemon failed to start{}",
@@ -104,6 +104,14 @@ pub fn create_session(
         }
         s => bail!("{}", s.strip_prefix("error: ").unwrap_or(s)),
     }
+}
+
+/// A session daemon that has been started.
+pub struct Spawned {
+    /// It writes "ok" (or an error) here once the session is ready.
+    pub status: Box<dyn Read>,
+    /// Collect the process after it has died.
+    pub reap: Box<dyn FnOnce()>,
 }
 
 pub fn session_exists(dir: &Path, name: &str) -> Result<bool> {

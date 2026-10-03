@@ -118,9 +118,54 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  windows:
+    name: Build Windows (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Package MSI and zip
+        run: |
+          $version = (bash packaging/version.sh)
+          "VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+          $bin = "target/${{ matrix.target }}/release/rterm.exe"
+          ./packaging/windows/build-msi.ps1 -Binary $bin -Arch ${{ matrix.arch }} -Version $version -Out dist
+          # An older-versioned build of the same binary, to test upgrading.
+          ./packaging/windows/build-msi.ps1 -Binary $bin -Arch ${{ matrix.arch }} -Version 0.0.1 -Out old
+      - name: Install, upgrade and uninstall
+        run: |
+          ./packaging/windows/test-msi.ps1 -Msi (Get-Item dist/*.msi).FullName `
+            -OldMsi (Get-Item old/*.msi).FullName -Version $env:VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-windows-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
   repo:
     name: Sign and build repository
-    needs: [build, macos]
+    needs: [build, macos, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -180,7 +225,7 @@ jobs:
       - name: Sign packages and checksums
         run: |
           packaging/sign-rpms.sh dist/*.rpm
-          (cd dist && sha256sum -- *.deb *.rpm *.tar.gz > SHA256SUMS)
+          (cd dist && sha256sum -- *.deb *.rpm *.tar.gz *.msi *.zip > SHA256SUMS)
           sign=(gpg --batch --yes --local-user "$SIGNING_KEY" --digest-algo SHA512)
           if [[ -n "${GPG_PASSPHRASE_FILE:-}" ]]; then
             sign+=(--pinentry-mode loopback --passphrase-file "$GPG_PASSPHRASE_FILE")

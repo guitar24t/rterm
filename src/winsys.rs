@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::{mem, ptr};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_SHARING_VIOLATION, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, S_OK,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_SUCCESS, HANDLE,
+    HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, S_OK, SetHandleInformation,
 };
 use windows_sys::Win32::System::Console::{
     CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, COORD, CTRL_BREAK_EVENT, CTRL_C_EVENT,
@@ -30,11 +31,12 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use crate::protocol::WinSize;
@@ -505,35 +507,19 @@ pub fn spawn_session(
         }
         let console = PseudoConsole(hpc);
 
-        let mut attr_size = 0usize;
-        InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut attr_size);
-        let mut attr_buf = vec![0u8; attr_size];
-        let attrs = attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-        check(InitializeProcThreadAttributeList(
-            attrs,
-            1,
-            0,
-            &mut attr_size,
-        ))?;
-        let attr_result = check(UpdateProcThreadAttribute(
-            attrs,
-            0,
+        let mut attrs = Attributes::new()?;
+        // For this attribute the value is the HPCON itself, not a pointer to it.
+        attrs.set(
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
             hpc as *const c_void,
             mem::size_of::<HPCON>(),
-            ptr::null_mut(),
-            ptr::null(),
-        ));
-        if let Err(e) = attr_result {
-            DeleteProcThreadAttributeList(attrs);
-            return Err(e);
-        }
+        )?;
 
         let mut startup: STARTUPINFOEXW = mem::zeroed();
         startup.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
         // No standard handles: the program talks to the pseudo console only.
         startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        startup.lpAttributeList = attrs;
+        startup.lpAttributeList = attrs.ptr();
 
         let mut cmdline = command_line(argv);
         let env_block = environment_block(env);
@@ -551,7 +537,7 @@ pub fn spawn_session(
             &startup.StartupInfo,
             &mut info,
         ));
-        DeleteProcThreadAttributeList(attrs);
+        drop(attrs);
         created?;
 
         // Put the program (and anything it starts) in a job that dies with
@@ -580,6 +566,131 @@ pub fn spawn_session(
             pid: info.dwProcessId,
         })
     }
+}
+
+/// A process-thread attribute list holding one attribute.
+struct Attributes {
+    buf: Vec<u8>,
+}
+
+impl Attributes {
+    fn new() -> io::Result<Attributes> {
+        let mut size = 0usize;
+        unsafe { InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size) };
+        let mut buf = vec![0u8; size];
+        let list = buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        check(unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) })?;
+        Ok(Attributes { buf })
+    }
+
+    fn ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST
+    }
+
+    /// `value` must stay alive and unmoved until the process is created.
+    fn set<T>(&mut self, attribute: usize, value: *const T, size: usize) -> io::Result<()> {
+        let list = self.ptr();
+        check(unsafe {
+            UpdateProcThreadAttribute(
+                list,
+                0,
+                attribute,
+                value.cast(),
+                size,
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        })
+    }
+}
+
+impl Drop for Attributes {
+    fn drop(&mut self) {
+        unsafe { DeleteProcThreadAttributeList(self.ptr()) };
+    }
+}
+
+/// A session daemon starting in the background.
+pub struct Daemon {
+    /// Where it reports "ok" (or an error) once it is ready.
+    pub status: File,
+    pub process: OwnedHandle,
+}
+
+/// Start `exe args...` with no console, in its own process group, outside
+/// the caller's job object if that's allowed (Windows OpenSSH puts each
+/// connection in a job that is killed when the connection closes, but lets
+/// processes break away), and inheriting exactly three handles: NUL for
+/// input, a pipe for its status line, and `log` for errors. Plain
+/// CreateProcess would hand it every inheritable handle we have, such as the
+/// pipes of whoever is waiting for *our* output, keeping them open for the
+/// lifetime of the session.
+pub fn spawn_daemon(exe: &Path, args: &[OsString], log: &File) -> io::Result<Daemon> {
+    let nul = OpenOptions::new().read(true).open("NUL")?;
+    let log = log.try_clone()?;
+    let (mut status_read, mut status_write): (HANDLE, HANDLE) = (ptr::null_mut(), ptr::null_mut());
+    check(unsafe { CreatePipe(&mut status_read, &mut status_write, ptr::null(), 0) })?;
+    let status = unsafe { File::from_raw_handle(status_read as _) };
+    let status_write = unsafe { OwnedHandle::from_raw_handle(status_write as _) };
+    let handles: [HANDLE; 3] = [
+        nul.as_raw_handle() as HANDLE,
+        status_write.as_raw_handle() as HANDLE,
+        log.as_raw_handle() as HANDLE,
+    ];
+    for h in handles {
+        check(unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) })?;
+    }
+
+    let mut argv = vec![exe.as_os_str().to_owned()];
+    argv.extend(args.iter().cloned());
+    let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | EXTENDED_STARTUPINFO_PRESENT;
+    let mut result = Err(io::Error::other("no attempt made"));
+    for flags in [base | CREATE_BREAKAWAY_FROM_JOB, base] {
+        let mut attrs = Attributes::new()?;
+        attrs.set(
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            handles.as_ptr(),
+            mem::size_of_val(&handles),
+        )?;
+        let mut startup: STARTUPINFOEXW = unsafe { mem::zeroed() };
+        startup.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = handles[0];
+        startup.StartupInfo.hStdOutput = handles[1];
+        startup.StartupInfo.hStdError = handles[2];
+        startup.lpAttributeList = attrs.ptr();
+        let mut cmdline = command_line(&argv);
+        let mut info: PROCESS_INFORMATION = unsafe { mem::zeroed() };
+        let created = check(unsafe {
+            CreateProcessW(
+                ptr::null(),
+                cmdline.as_mut_ptr(),
+                ptr::null(),
+                ptr::null(),
+                1,
+                flags,
+                ptr::null(),
+                ptr::null(),
+                &startup.StartupInfo,
+                &mut info,
+            )
+        });
+        match created {
+            Ok(()) => {
+                unsafe { CloseHandle(info.hThread) };
+                result = Ok(unsafe { OwnedHandle::from_raw_handle(info.hProcess as _) });
+                break;
+            }
+            // Our job forbids breaking away; the session then lives only as
+            // long as the job does.
+            Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => result = Err(e),
+            Err(e) => return Err(e),
+        }
+    }
+    let process = result?;
+    // Only the daemon may hold the write end, so we see EOF once it reports.
+    drop(status_write);
+    Ok(Daemon { status, process })
 }
 
 /// Wait for a process to exit and return its exit code.

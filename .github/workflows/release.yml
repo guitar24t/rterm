@@ -46,11 +46,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="Install or update from the package repository: https://guitar24t.github.io/rterm/
+          notes="Install or update:
 
-          \`\`\`
-          curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh
-          \`\`\`"
+          - Linux: \`curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh\`
+          - macOS: \`brew install guitar24t/tap/rterm\`
+          - Windows: download and run the \`.msi\` below (per-user, no administrator rights)
+
+          More at https://guitar24t.github.io/rterm/"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/*
           else
