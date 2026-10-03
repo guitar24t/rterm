@@ -89,7 +89,9 @@ jobs:
         run: |
           mkdir check && tar -C check -xzf dist/rterm-*-macos-universal.tar.gz
           bin=$(echo check/rterm-*/rterm)
-          lipo -verify_arch arm64 x86_64 "$bin"
+          archs=" $(lipo -archs "$bin") "
+          echo "architectures:$archs"
+          [[ "$archs" == *" arm64 "* && "$archs" == *" x86_64 "* ]]
           vtool -show-build "$bin" | grep -E 'minos'
           arch -arm64 "$bin" --version
           if ! arch -x86_64 /usr/bin/true 2> /dev/null; then
