@@ -88,13 +88,21 @@ impl Env {
         ]
     }
 
+    /// Run rterm non-interactively. Fails (instead of hanging) if anything
+    /// keeps its output pipes open, as a leaked handle in a daemon would.
     fn run(&self, args: &[&str]) -> String {
-        let out = Command::new(env!("CARGO_BIN_EXE_rterm"))
-            .args(args)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_rterm"));
+        cmd.args(args)
             .envs(self.vars())
             .env_remove("RTERM_SESSION")
-            .stdin(Stdio::null())
-            .output()
+            .stdin(Stdio::null());
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(cmd.output());
+        });
+        let out = rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("rterm {args:?} kept its output open (leaked handle?)"))
             .unwrap();
         String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
     }

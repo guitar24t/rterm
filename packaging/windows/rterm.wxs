@@ -1,0 +1,60 @@
+<!--
+  MSI for Rob Terminal (WiX Toolset v5). Built by packaging/windows/build-msi.ps1:
+    wix build -arch x64 -d Version=0.1.5 -d BinDir=<dir with rterm.exe> -o rterm.msi rterm.wxs
+
+  Installs per user (no administrator rights) into
+  %LOCALAPPDATA%\Programs\Rob Terminal and adds that folder to the user's PATH.
+  The UpgradeCode never changes, so a newer MSI replaces an older one in place.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Rob Terminal"
+      Manufacturer="Robert Hilton"
+      Version="$(var.Version)"
+      UpgradeCode="2EE33968-60E7-4F06-A3AA-64273692D24E"
+      Scope="perUser"
+      Language="1033">
+    <SummaryInformation Description="Rob Terminal (rterm): persistent terminal sessions that behave like a plain terminal" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Rob Terminal is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/guitar24t/rterm" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/guitar24t/rterm#readme" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsDir" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Rob Terminal" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Per-user components keep their key path in HKCU (ICE38). -->
+    <ComponentGroup Id="RobTerminal" Directory="INSTALLFOLDER">
+      <Component Id="RtermExe">
+        <File Id="RtermExe" Source="$(var.BinDir)\rterm.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\Rob Terminal" Name="rterm" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" System="no" Permanent="no" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramsDir" Directory="ProgramsDir" On="uninstall" />
+      </Component>
+      <Component Id="RtermConnectExe">
+        <File Id="RtermConnectExe" Source="$(var.BinDir)\rterm-connect.exe" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\Rob Terminal" Name="rterm-connect" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="Docs">
+        <File Id="Readme" Source="$(var.BinDir)\README.md" KeyPath="no" />
+        <File Id="License" Source="$(var.BinDir)\LICENSE" KeyPath="no" />
+        <RegistryValue Root="HKCU" Key="Software\Rob Terminal" Name="docs" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Id="RegistryCleanup">
+        <RegistryValue Root="HKCU" Key="Software\Rob Terminal" Name="version" Type="string" Value="$(var.Version)" KeyPath="yes" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Rob Terminal" Action="removeOnUninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Rob Terminal">
+      <ComponentGroupRef Id="RobTerminal" />
+    </Feature>
+  </Package>
+</Wix>

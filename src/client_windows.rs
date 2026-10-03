@@ -5,19 +5,14 @@
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-};
 
-use super::Outcome;
+use super::{Outcome, Spawned};
 use crate::ipc::Stream;
 use crate::keys::{DetachKey, KeyScanner};
 use crate::protocol::{FrameReader, Msg, WinSize};
@@ -51,29 +46,18 @@ pub fn run_daemon_binary(_pid: i32, version: u32) -> Result<i32> {
     bail!("session was started by an rterm speaking protocol v{version}; use that rterm to attach")
 }
 
-/// Start `rterm __daemon ...` with no console and outside the caller's job:
-/// Windows OpenSSH puts each connection in a job that is killed when the
-/// connection closes, but allows processes to break away from it.
-pub fn spawn_daemon(args: &[OsString], log: File) -> Result<Child> {
+/// Start `rterm __daemon ...` in the background (see winsys::spawn_daemon),
+/// from a private copy of rterm.exe so the installed one can be upgraded
+/// while the session runs.
+pub fn spawn_daemon(args: &[OsString], log: File) -> Result<Spawned> {
     let dir = crate::paths::ensure_socket_dir()?;
     let exe = winsys::session_exe(&dir).context("preparing the session executable")?;
-    let spawn = |flags: u32| -> std::io::Result<Child> {
-        Command::new(&exe)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(log.try_clone()?)
-            .creation_flags(flags)
-            .spawn()
-    };
-    let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-    match spawn(detached | CREATE_BREAKAWAY_FROM_JOB) {
-        Ok(child) => Ok(child),
-        // ERROR_ACCESS_DENIED: our job doesn't allow breaking away. The
-        // session then lives only as long as that job does.
-        Err(e) if e.raw_os_error() == Some(5) => spawn(detached).context("starting session daemon"),
-        Err(e) => Err(e).context("starting session daemon"),
-    }
+    let daemon = winsys::spawn_daemon(&exe, args, &log).context("starting session daemon")?;
+    let process = daemon.process;
+    Ok(Spawned {
+        status: Box::new(daemon.status),
+        reap: Box::new(move || drop(process)),
+    })
 }
 
 enum Event {

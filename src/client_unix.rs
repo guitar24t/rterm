@@ -8,7 +8,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -17,7 +17,7 @@ use anyhow::{Context, Result, bail};
 use nix::fcntl::{Flock, FlockArg};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM, SIGWINCH};
 
-use super::Outcome;
+use super::{Outcome, Spawned};
 use crate::keys::{DetachKey, KeyScanner};
 use crate::protocol::{FrameReader, Msg, WinSize};
 use crate::sys::{self, RawMode};
@@ -42,7 +42,7 @@ pub fn lock_is_free(lock: &Path) -> bool {
 }
 
 /// Start `rterm __daemon ...` detached from this terminal.
-pub fn spawn_daemon(args: &[OsString], log: File) -> Result<Child> {
+pub fn spawn_daemon(args: &[OsString], log: File) -> Result<Spawned> {
     let exe = std::env::current_exe().context("locating the rterm executable")?;
     let mut cmd = Command::new(exe);
     cmd.args(args)
@@ -60,7 +60,14 @@ pub fn spawn_daemon(args: &[OsString], log: File) -> Result<Child> {
             Ok(())
         });
     }
-    cmd.spawn().context("starting session daemon")
+    let mut child = cmd.spawn().context("starting session daemon")?;
+    let status = child.stdout.take().expect("stdout is piped");
+    Ok(Spawned {
+        status: Box::new(status),
+        reap: Box::new(move || {
+            let _ = child.wait();
+        }),
+    })
 }
 
 /// Relay between this terminal and an attached session until it ends.
