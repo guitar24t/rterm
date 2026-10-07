@@ -25,6 +25,7 @@ use crate::ipc::{Listener, Stream};
 use crate::paths;
 use crate::protocol::{self, FrameReader, Msg, SessionInfo, WinSize};
 use crate::screen::{Screen, clamp_size};
+use crate::transfer::{Action, Router};
 use crate::winsys::{self, PseudoConsole};
 
 /// Pause reading the session while this much output waits for the client.
@@ -127,6 +128,7 @@ struct Daemon {
     size: WinSize,
     conns: HashMap<u64, Conn>,
     next_id: u64,
+    router: Router,
 
     created: u64,
     command: String,
@@ -275,6 +277,7 @@ impl Daemon {
             filter: ConptyFilter::default(),
             size,
             conns: HashMap::new(),
+            router: Router::default(),
             next_id: 0,
             created: crate::util::now_unix(),
             command,
@@ -427,6 +430,25 @@ impl Daemon {
             if c.attached {
                 *self.throttle.lock().unwrap() = None;
             }
+            let actions = self.router.disconnected(id);
+            self.route(actions);
+        }
+    }
+
+    fn route(&mut self, actions: Vec<Action>) {
+        for action in actions {
+            match action {
+                Action::Send(id, msg) => {
+                    if let Some(c) = self.conns.get(&id) {
+                        c.send(&msg);
+                    }
+                }
+                Action::Close(id) => {
+                    if let Some(c) = self.conns.get(&id) {
+                        c.close();
+                    }
+                }
+            }
         }
     }
 
@@ -482,6 +504,13 @@ impl Daemon {
             Msg::Kill => {
                 self.reply_and_close(id, &Msg::Ok);
                 self.kill_session();
+            }
+            msg @ (Msg::AgentHello { .. }
+            | Msg::TransferBegin { .. }
+            | Msg::Transfer { .. }
+            | Msg::TransferEnd { .. }) => {
+                let actions = self.router.message(id, msg);
+                self.route(actions);
             }
             Msg::Input(_) | Msg::Resize(_) => {}
             // Daemon-to-client messages are not valid here.

@@ -536,3 +536,86 @@ fn default_shell_is_powershell_or_the_openssh_default() {
     );
     env.run(&["kill", "dflt"]);
 }
+
+/// `rterm get` and `rterm put` as run in session `session` (they find it
+/// through RTERM_SESSION), with the transfer endpoint talking to the
+/// session directly instead of over ssh.
+#[test]
+fn get_and_put_through_the_session() {
+    let env = Env::new();
+    let root = std::env::temp_dir().join(format!("rt-w-xfer-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (work, downloads, laptop) = (root.join("work"), root.join("dl"), root.join("laptop"));
+    for d in [&work, &downloads, &laptop] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(work.join("notes.txt"), "from the server").unwrap();
+    std::fs::create_dir_all(work.join("logs")).unwrap();
+    let big: Vec<u8> = (0..5_000_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(work.join("logs").join("big.bin"), &big).unwrap();
+    std::fs::write(laptop.join("photo.jpg"), "jpeg bytes").unwrap();
+
+    let out = env.run(&["new", "-d", "x", "--", "cmd.exe", "/d"]);
+    assert!(out.contains("created session 'x'"), "{out}");
+    let in_session = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rterm"))
+            .args(args)
+            .envs(env.vars())
+            .env("RTERM_SESSION", "x")
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
+    };
+
+    let out = in_session(&["get", "notes.txt"]);
+    assert!(out.contains("rterm-connect"), "{out}");
+
+    let mut endpoint = Command::new(env!("CARGO_BIN_EXE_rterm"))
+        .args([
+            "__transfer-endpoint",
+            "--session",
+            "x",
+            "--host",
+            "laptop",
+            "--direct",
+        ])
+        .arg("--download-dir")
+        .arg(&downloads)
+        .arg("--cwd")
+        .arg(&laptop)
+        .envs(env.vars())
+        .env("RTERM_TRANSFER_CONFIRM", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_secs(1));
+
+    let out = in_session(&["get", "notes.txt", "logs"]);
+    assert!(out.contains("(15 B)") && out.contains("(5.0 MB)"), "{out}");
+    assert_eq!(
+        std::fs::read(downloads.join("notes.txt")).unwrap(),
+        b"from the server"
+    );
+    assert_eq!(
+        std::fs::read(downloads.join("logs").join("big.bin")).unwrap(),
+        big
+    );
+    in_session(&["get", "notes.txt"]);
+    assert!(downloads.join("notes (1).txt").is_file());
+
+    let out = in_session(&["put", "photo.jpg"]);
+    assert!(out.contains("photo.jpg"), "{out}");
+    assert_eq!(
+        std::fs::read(work.join("photo.jpg")).unwrap(),
+        b"jpeg bytes"
+    );
+
+    let _ = endpoint.kill();
+    let _ = endpoint.wait();
+    env.run(&["kill", "x"]);
+    let _ = std::fs::remove_dir_all(&root);
+}

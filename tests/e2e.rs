@@ -918,3 +918,129 @@ fn sessions_do_not_inherit_multiplexer_markers() {
     a.send("exit\r");
     a.wait_exit();
 }
+
+/// A scratch directory for files a test transfers.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rt-xfer-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The computer-side transfer endpoint, as rterm-connect would start it,
+/// but talking to the session directly instead of over ssh.
+fn endpoint(env: &Env, session: &str, downloads: &Path, cwd: &Path, confirm: &str) -> Child {
+    let mut cmd = env.command(&[
+        "__transfer-endpoint",
+        "--session",
+        session,
+        "--host",
+        "laptop",
+    ]);
+    cmd.arg("--direct")
+        .arg("--download-dir")
+        .arg(downloads)
+        .arg("--cwd")
+        .arg(cwd)
+        .env("RTERM_TRANSFER_CONFIRM", confirm)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().unwrap()
+}
+
+#[test]
+fn get_and_put_files_from_inside_a_session() {
+    let env = Env::new();
+    let work = scratch("work");
+    let downloads = scratch("downloads");
+    let laptop = scratch("laptop");
+    std::fs::write(work.join("notes.txt"), "from the server\n").unwrap();
+    std::fs::create_dir_all(work.join("logs/old")).unwrap();
+    std::fs::write(work.join("logs/old/a.log"), "a").unwrap();
+    let big: Vec<u8> = (0..20_000_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(work.join("logs/big.bin"), &big).unwrap();
+    std::fs::write(laptop.join("photo.jpg"), "jpeg bytes").unwrap();
+
+    let mut cmd = env.command(&args(&["new", "xfer"]));
+    cmd.current_dir(&work);
+    let mut a = Outer::spawn(cmd, 30, 200);
+    a.wait_prompt();
+    a.send(&format!("RT={}\r", env!("CARGO_BIN_EXE_rterm")));
+    a.wait_prompt();
+
+    // Without the computer's side of the connection, say how to get it.
+    a.send("$RT get notes.txt || echo failed-$((40+2))\r");
+    a.wait_text("failed-42");
+    assert!(a.screen().contains("rterm-connect"), "{}", a.screen());
+
+    let mut ep = endpoint(&env, "xfer", &downloads, &laptop, "off");
+    // get: into the download folder, never over an existing file.
+    a.send("clear; sleep 1; $RT get notes.txt logs && $RT get notes.txt && echo got-$((40+2))\r");
+    a.wait_text("got-42");
+    assert_eq!(
+        std::fs::read_to_string(downloads.join("notes.txt")).unwrap(),
+        "from the server\n"
+    );
+    assert_eq!(std::fs::read(downloads.join("logs/big.bin")).unwrap(), big);
+    assert_eq!(
+        std::fs::read(downloads.join("logs/old/a.log")).unwrap(),
+        b"a"
+    );
+    assert!(downloads.join("notes (1).txt").is_file());
+    let screen = a.screen();
+    assert!(screen.contains("notes (1).txt  (16 B)"), "{screen}");
+    assert!(screen.contains("2 files, 20.0 MB"), "{screen}");
+
+    // put: from the computer (relative to where rterm-connect ran) into
+    // the session's current directory, or --to.
+    a.send(
+        "clear; mkdir in; $RT put photo.jpg --to in && $RT put photo.jpg && echo put-$((40+2))\r",
+    );
+    a.wait_text("put-42");
+    assert_eq!(
+        std::fs::read(work.join("in/photo.jpg")).unwrap(),
+        b"jpeg bytes"
+    );
+    assert_eq!(
+        std::fs::read(work.join("photo.jpg")).unwrap(),
+        b"jpeg bytes"
+    );
+    a.send("clear; $RT put nowhere.jpg || echo missing-$((40+2))\r");
+    a.wait_text("missing-42");
+    assert!(
+        a.screen().contains("not found on your computer"),
+        "{}",
+        a.screen()
+    );
+    ep.kill().unwrap();
+    ep.wait().unwrap();
+
+    // When the user says no (here: always no), nothing moves; get into
+    // the download folder needs no confirmation.
+    let mut ep = endpoint(&env, "xfer", &downloads, &laptop, "deny");
+    let elsewhere = scratch("elsewhere");
+    a.send(&format!(
+        "clear; sleep 1; $RT put photo.jpg --to in -f || $RT get notes.txt --to {} || echo denied-$((40+2))\r",
+        elsewhere.display()
+    ));
+    a.wait_text("denied-42");
+    assert_eq!(
+        a.screen().matches("declined on your computer").count(),
+        2,
+        "{}",
+        a.screen()
+    );
+    assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+    a.send("clear; $RT get notes.txt >/dev/null && echo allowed-$((40+2))\r");
+    a.wait_text("allowed-42");
+    assert!(downloads.join("notes (2).txt").is_file());
+    ep.kill().unwrap();
+    ep.wait().unwrap();
+
+    a.send("exit\r");
+    a.wait_exit();
+    for dir in [work, downloads, laptop, elsewhere] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

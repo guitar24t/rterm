@@ -58,6 +58,28 @@ pub enum Msg {
     Kill,
     DetachClient,
 
+    // File transfers (see transfer.rs). The daemon routes these between a
+    // `rterm get`/`rterm put` process in the session and the transfer
+    // endpoint on the user's computer, without looking inside `payload`.
+    /// Register this connection as the session's transfer endpoint.
+    AgentHello {
+        version: u32,
+    },
+    /// Start transfer `id` (session side); forwarded to the endpoint.
+    TransferBegin {
+        id: u64,
+        payload: Vec<u8>,
+    },
+    /// A message within transfer `id`, in either direction.
+    Transfer {
+        id: u64,
+        payload: Vec<u8>,
+    },
+    /// Transfer `id` is over (or one side went away).
+    TransferEnd {
+        id: u64,
+    },
+
     // daemon -> client
     Output(Vec<u8>),
     /// `drain_input`: the terminal was reporting key releases (kitty
@@ -87,6 +109,10 @@ mod tag {
     pub const QUERY: u8 = 5;
     pub const KILL: u8 = 6;
     pub const DETACH_CLIENT: u8 = 7;
+    pub const AGENT_HELLO: u8 = 8;
+    pub const TRANSFER_BEGIN: u8 = 9;
+    pub const TRANSFER: u8 = 10;
+    pub const TRANSFER_END: u8 = 11;
     pub const OUTPUT: u8 = 100;
     pub const DETACHED: u8 = 101;
     pub const EXITED: u8 = 102;
@@ -96,27 +122,27 @@ mod tag {
     pub const INCOMPATIBLE: u8 = 106;
 }
 
-struct Enc(Vec<u8>);
+pub(crate) struct Enc(pub(crate) Vec<u8>);
 
 impl Enc {
-    fn u16(&mut self, v: u16) -> &mut Self {
+    pub(crate) fn u16(&mut self, v: u16) -> &mut Self {
         self.0.extend_from_slice(&v.to_be_bytes());
         self
     }
-    fn u32(&mut self, v: u32) -> &mut Self {
+    pub(crate) fn u32(&mut self, v: u32) -> &mut Self {
         self.0.extend_from_slice(&v.to_be_bytes());
         self
     }
-    fn u64(&mut self, v: u64) -> &mut Self {
+    pub(crate) fn u64(&mut self, v: u64) -> &mut Self {
         self.0.extend_from_slice(&v.to_be_bytes());
         self
     }
-    fn bytes(&mut self, v: &[u8]) -> &mut Self {
+    pub(crate) fn bytes(&mut self, v: &[u8]) -> &mut Self {
         self.u32(v.len() as u32);
         self.0.extend_from_slice(v);
         self
     }
-    fn str(&mut self, v: &str) -> &mut Self {
+    pub(crate) fn str(&mut self, v: &str) -> &mut Self {
         self.bytes(v.as_bytes())
     }
     fn size(&mut self, s: WinSize) -> &mut Self {
@@ -124,10 +150,10 @@ impl Enc {
     }
 }
 
-struct Dec<'a>(&'a [u8]);
+pub(crate) struct Dec<'a>(pub(crate) &'a [u8]);
 
 impl<'a> Dec<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.0.len() < n {
             bail!("truncated message");
         }
@@ -135,20 +161,20 @@ impl<'a> Dec<'a> {
         self.0 = tail;
         Ok(head)
     }
-    fn u16(&mut self) -> Result<u16> {
+    pub(crate) fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_be_bytes(self.take(2)?.try_into()?))
     }
-    fn u32(&mut self) -> Result<u32> {
+    pub(crate) fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(self.take(4)?.try_into()?))
     }
-    fn u64(&mut self) -> Result<u64> {
+    pub(crate) fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_be_bytes(self.take(8)?.try_into()?))
     }
-    fn bytes(&mut self) -> Result<&'a [u8]> {
+    pub(crate) fn bytes(&mut self) -> Result<&'a [u8]> {
         let n = self.u32()? as usize;
         self.take(n)
     }
-    fn str(&mut self) -> Result<String> {
+    pub(crate) fn str(&mut self) -> Result<String> {
         Ok(String::from_utf8_lossy(self.bytes()?).into_owned())
     }
     fn size(&mut self) -> Result<WinSize> {
@@ -191,6 +217,22 @@ impl Msg {
             }
             Msg::Kill => tag::KILL,
             Msg::DetachClient => tag::DETACH_CLIENT,
+            Msg::AgentHello { version } => {
+                e.u32(*version);
+                tag::AGENT_HELLO
+            }
+            Msg::TransferBegin { id, payload } => {
+                e.u64(*id).bytes(payload);
+                tag::TRANSFER_BEGIN
+            }
+            Msg::Transfer { id, payload } => {
+                e.u64(*id).bytes(payload);
+                tag::TRANSFER
+            }
+            Msg::TransferEnd { id } => {
+                e.u64(*id);
+                tag::TRANSFER_END
+            }
             Msg::Output(b) => {
                 e.0.extend_from_slice(b);
                 tag::OUTPUT
@@ -257,6 +299,16 @@ impl Msg {
             tag::QUERY => Msg::Query { version: d.u32()? },
             tag::KILL => Msg::Kill,
             tag::DETACH_CLIENT => Msg::DetachClient,
+            tag::AGENT_HELLO => Msg::AgentHello { version: d.u32()? },
+            tag::TRANSFER_BEGIN => Msg::TransferBegin {
+                id: d.u64()?,
+                payload: d.bytes()?.to_vec(),
+            },
+            tag::TRANSFER => Msg::Transfer {
+                id: d.u64()?,
+                payload: d.bytes()?.to_vec(),
+            },
+            tag::TRANSFER_END => Msg::TransferEnd { id: d.u64()? },
             tag::OUTPUT => Msg::Output(p.to_vec()),
             tag::DETACHED => Msg::Detached {
                 reason: d.str()?,
@@ -364,6 +416,16 @@ mod tests {
             Msg::Query { version: VERSION },
             Msg::Kill,
             Msg::DetachClient,
+            Msg::AgentHello { version: VERSION },
+            Msg::TransferBegin {
+                id: 7,
+                payload: vec![1, 2, 3],
+            },
+            Msg::Transfer {
+                id: u64::MAX,
+                payload: vec![],
+            },
+            Msg::TransferEnd { id: 9 },
             Msg::Output(vec![0, 1, 2, 255]),
             Msg::Detached {
                 reason: "bye".into(),

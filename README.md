@@ -21,6 +21,7 @@ rterm          # everything is exactly where you left it
 [Quick start](#quick-start) ·
 [Using it](#using-rob-terminal) ·
 [rterm-connect](#rterm-connect-pick-a-session-from-your-own-computer) ·
+[Files](#moving-files-rterm-get-and-rterm-put) ·
 [Reference](#reference) ·
 [How it works](#how-it-works) ·
 [FAQ](#troubleshooting-and-faq)
@@ -369,6 +370,7 @@ rterm-connect --list me@myserver -p 2222 -i ~/.ssh/work_key
 | `--rterm PATH` | Where `rterm` is on the host, if it isn't on the `PATH` |
 | `--no-mux` | Use separate ssh connections for listing and attaching |
 | `--no-clipboard` | Don't bring program copies to the local clipboard |
+| `--no-transfer` | Don't serve [`rterm get` and `rterm put`](#moving-files-rterm-get-and-rterm-put) for this connection |
 
 Listing and attaching share one ssh connection, so you authenticate once even
 with passwords or two-factor prompts. If your ssh configuration already
@@ -392,6 +394,50 @@ XWayland and is shared with Wayland apps. Nothing extra needs installing.
 | `RTERM_CONNECT_CLIPBOARD_CMD` | Your own copy command; it receives the text on stdin |
 | `RTERM_CONNECT_DEBUG=FILE` | Log each copy and how it was delivered |
 
+## Moving files: rterm get and rterm put
+
+When you reach a session with `rterm-connect`, the session knows which
+computer you're sitting at, so files move between the two with one command
+typed right where you're working. There's no second tool, no path to retype
+and no `scp user@host:...` to assemble.
+
+```console
+server$ rterm get report.pdf logs/
+report.pdf  → ~/Downloads/report.pdf  (1.2 MB)
+logs        → ~/Downloads/logs  (38 files, 4.1 MB)
+
+server$ rterm put ~/Desktop/data.csv
+data.csv  → ~/project/data.csv  (220.0 KB)
+```
+
+- **`rterm get PATH...`** copies files and folders from the session to your
+  computer's Downloads folder. `--to DIR` saves somewhere else on your
+  computer; saving outside Downloads asks for your OK there first.
+- **`rterm put PATH...`** copies files and folders from your computer into
+  the session's current directory, or `--to DIR`. `PATH` is a path on your
+  computer: `~` is your home folder there (an unquoted `~` that the server's
+  shell expands still works), and relative paths start in the folder you ran
+  `rterm-connect` from. **Every put shows a dialog on your computer** naming
+  the host, the files and the destination, and nothing is read until you
+  click Allow.
+- Nothing is overwritten: a second `report.pdf` arrives as `report (1).pdf`.
+  `-f` replaces instead.
+- Large transfers show progress, Ctrl-C cancels cleanly, and partial files
+  never appear under their final name.
+
+It works when Rob Terminal is installed on your computer as well as the
+server: `rterm-connect` then starts a small helper alongside your connection.
+The helper reaches the session over its own ssh channel, sharing your
+connection where ssh can (Linux and macOS) so there's no second login, and
+file data never passes through your terminal. The helper can only answer requests from the session
+you're attached to, and stops when you disconnect.
+
+| Variable (on your computer) | Effect |
+|---|---|
+| `RTERM_DOWNLOAD_DIR` | Where `rterm get` saves (default: your Downloads folder) |
+| `RTERM_TRANSFER_CONFIRM=off` | Allow without a dialog, for a computer with no desktop to show one on |
+| `RTERM_TRANSFER_CONFIRM=deny` | Refuse anything that would need your OK |
+
 ---
 
 ## Reference
@@ -406,6 +452,8 @@ XWayland and is shared with Wayland apps. Nothing extra needs installing.
 | `rterm ls [--json]` | `list` | List sessions; `--json` for scripts |
 | `rterm detach [NAME]` | `d` | Detach whoever is attached to `NAME` (default: this session) |
 | `rterm kill [NAME]` | `k` | End `NAME` (default: this session) and wait until it's gone |
+| `rterm get PATH... [--to DIR] [-f]` | | Copy from the session to your computer ([details](#moving-files-rterm-get-and-rterm-put)) |
+| `rterm put PATH... [--to DIR] [-f]` | | Copy from your computer into the session, after your OK |
 
 Options for attaching and creating:
 
@@ -423,6 +471,8 @@ Options for attaching and creating:
 | `RTERM_SOCKET_DIR` | your shell | Where sessions live (default `/tmp/rterm-$UID`, on Windows `%LOCALAPPDATA%\rterm`) |
 | `RTERM_SHELL` | your shell (Windows) | Program new sessions start instead of the default shell |
 | `RTERM_SESSION` | set inside sessions | The session's name |
+| `RTERM_DOWNLOAD_DIR` | your computer | Where `rterm get` saves |
+| `RTERM_TRANSFER_CONFIRM` | your computer | `off` or `deny` instead of a dialog for transfers that need your OK |
 | `SSH_AUTH_SOCK` | set inside sessions | Follows the most recently attached ssh agent |
 | `RTERM_NO_AUTO_UPDATE=1` | installer | Don't enable unattended upgrades on Ubuntu |
 
@@ -469,6 +519,13 @@ session's main process.
   modes into your terminal; and when you detach, to switch those modes off
   again. While nobody is attached, it also answers the questions programs ask
   their terminal (cursor position, device attributes), so they don't hang.
+- **File transfer.** `rterm-connect` starts a helper on your computer that
+  connects to the session daemon over its own ssh channel (`rterm __bridge`)
+  and registers as the session's transfer endpoint. `rterm get` and `rterm
+  put` inside the session talk to the daemon, which pairs them with that
+  endpoint and passes their messages through without reading them. All the
+  checks that protect your computer (confirmation dialogs, safe file names,
+  never overwriting) happen on your computer, not the server.
 - **Housekeeping.** If a /tmp cleaner deletes a session's socket, the daemon
   recreates it; it also keeps its files fresh so age-based cleaners leave
   them alone. A daemon that crashes leaves its error output in
@@ -519,6 +576,20 @@ terminal's own selection.
 detached from, so the scrollback was replayed below the copy already there.
 A fresh window shows it once.
 
+**`rterm get` says it needs "your computer's side of the connection".**
+Connect with `rterm-connect`, and install Rob Terminal on the computer you
+connect from too (the helper that receives files is part of it). A session
+started by a plain `ssh host rterm` has no way to reach your computer.
+
+**`rterm get` works but every `rterm put` is refused.** The confirmation
+dialog couldn't be shown: the error says why. On Linux it needs `zenity` (or
+`kdialog`) and a desktop session. On a computer without a desktop, set
+`RTERM_TRANSFER_CONFIRM=off` before running `rterm-connect`.
+
+**Transfers never start on Windows.** Windows' ssh can't share a connection,
+so the helper logs in separately, without prompting; that works with key or
+agent logins but not passwords.
+
 **Ctrl-\\ is a key I need.** Choose another with `-e` or `RTERM_DETACH_KEY`,
 or turn it off with `-e none`.
 
@@ -543,6 +614,8 @@ off. Run `reset`.
 - History beyond the scrollback limit (`--scrollback`, 10,000 lines by
   default) isn't kept for replay.
 - Sessions don't survive a reboot of the machine they run on.
+- File transfer copies regular files and folders; symbolic links inside
+  folders are skipped, and only the executable bit of permissions is kept.
 - On Windows, the installer isn't code-signed and doesn't update itself yet.
 
 ---

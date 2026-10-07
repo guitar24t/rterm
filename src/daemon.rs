@@ -29,6 +29,7 @@ use crate::paths;
 use crate::protocol::{self, FrameReader, Msg, SessionInfo, WinSize};
 use crate::screen::{Screen, clamp_size};
 use crate::sys;
+use crate::transfer::{Action, Router};
 
 /// Stop reading the PTY while this much output is queued for the client
 /// (backpressure, like a real terminal that can't keep up).
@@ -42,6 +43,8 @@ const TOUCH_INTERVAL: Duration = Duration::from_secs(3600);
 const KILL_GRACE: Duration = Duration::from_secs(3);
 
 struct Conn {
+    /// Stable name for the transfer router (indexes shift).
+    id: u64,
     sock: UnixStream,
     reader: FrameReader,
     out: Vec<u8>,
@@ -52,8 +55,9 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(sock: UnixStream) -> Conn {
+    fn new(id: u64, sock: UnixStream) -> Conn {
         Conn {
+            id,
             sock,
             reader: FrameReader::default(),
             out: Vec::new(),
@@ -131,6 +135,8 @@ struct Daemon {
     size: WinSize,
     pty_out: Vec<u8>,
     conns: Vec<Conn>,
+    next_id: u64,
+    router: Router,
 
     sig_read: UnixStream,
     term_requested: Arc<AtomicBool>,
@@ -251,6 +257,8 @@ impl Daemon {
             size,
             pty_out: Vec::new(),
             conns: Vec::new(),
+            next_id: 0,
+            router: Router::default(),
             sig_read,
             term_requested,
             created: crate::util::now_unix(),
@@ -318,7 +326,12 @@ impl Daemon {
             for c in &mut self.conns {
                 c.flush();
             }
+            let gone: Vec<u64> = self.conns.iter().filter(|c| c.dead).map(|c| c.id).collect();
             self.conns.retain(|c| !c.dead);
+            for id in gone {
+                let actions = self.router.disconnected(id);
+                self.route(actions);
+            }
 
             if let Some(d) = self.kill_deadline
                 && Instant::now() >= d
@@ -357,7 +370,8 @@ impl Daemon {
             match self.listener.accept() {
                 Ok((sock, _)) => {
                     if sock.set_nonblocking(true).is_ok() {
-                        self.conns.push(Conn::new(sock));
+                        self.next_id += 1;
+                        self.conns.push(Conn::new(self.next_id, sock));
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -494,10 +508,34 @@ impl Daemon {
                     self.conns[i].closing = true;
                     self.kill_session();
                 }
+                msg @ (Msg::AgentHello { .. }
+                | Msg::TransferBegin { .. }
+                | Msg::Transfer { .. }
+                | Msg::TransferEnd { .. }) => {
+                    let actions = self.router.message(self.conns[i].id, msg);
+                    self.route(actions);
+                }
                 // Daemon-to-client messages are not valid here.
                 _ => {
                     self.conns[i].dead = true;
                     return;
+                }
+            }
+        }
+    }
+
+    fn route(&mut self, actions: Vec<Action>) {
+        for action in actions {
+            match action {
+                Action::Send(id, msg) => {
+                    if let Some(c) = self.conns.iter_mut().find(|c| c.id == id) {
+                        c.queue(&msg);
+                    }
+                }
+                Action::Close(id) => {
+                    if let Some(c) = self.conns.iter_mut().find(|c| c.id == id) {
+                        c.closing = true;
+                    }
                 }
             }
         }
