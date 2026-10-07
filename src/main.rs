@@ -19,11 +19,13 @@ mod protocol;
 mod screen;
 #[cfg(unix)]
 mod sys;
+mod transfer;
 mod util;
 #[cfg(windows)]
 mod winsys;
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
@@ -120,6 +122,44 @@ enum Cmd {
     /// End a session by hanging up its terminal
     #[command(visible_alias = "k")]
     Kill { name: Option<String> },
+    /// Copy files and folders from this session to your computer
+    #[command(
+        long_about = "Copy files and folders from this session to your computer.\n\n\
+            Run inside a session you reached with rterm-connect. Files land in your \
+            Downloads folder unless you give --to; saving anywhere else asks for your OK on \
+            your computer first. Existing files are kept: a copy gets a name like \
+            \"report (1).pdf\" unless you pass -f."
+    )]
+    Get {
+        /// Files or folders in this session
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Folder on your computer [default: your Downloads folder]
+        #[arg(long, value_name = "DIR")]
+        to: Option<String>,
+        /// Replace files that already exist instead of renaming the copy
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Copy files and folders from your computer into this session
+    #[command(
+        long_about = "Copy files and folders from your computer into this session.\n\n\
+            Run inside a session you reached with rterm-connect. PATH is a path on your \
+            computer: ~ is your home folder there, and relative paths start in the folder \
+            you ran rterm-connect from. Every put asks for your OK in a dialog on your \
+            computer. Files land in the current directory unless you give --to."
+    )]
+    Put {
+        /// Files or folders on your computer
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<String>,
+        /// Folder in this session [default: the current directory]
+        #[arg(long, value_name = "DIR")]
+        to: Option<PathBuf>,
+        /// Replace files that already exist instead of renaming the copy
+        #[arg(short, long)]
+        force: bool,
+    },
     #[command(name = "__daemon", hide = true)]
     Daemon {
         #[arg(long)]
@@ -136,6 +176,29 @@ enum Cmd {
         scrollback: usize,
         #[arg(last = true)]
         command: Vec<OsString>,
+    },
+    /// Joins stdin/stdout to a session (the far end of a transfer channel)
+    #[command(name = "__bridge", hide = true)]
+    Bridge { name: String },
+    /// Serves file transfers on the user's computer (started by rterm-connect)
+    #[command(name = "__transfer-endpoint", hide = true)]
+    TransferEndpoint {
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value = "rterm")]
+        rterm: String,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        #[arg(long)]
+        download_dir: Option<PathBuf>,
+        #[arg(long)]
+        parent: Option<u32>,
+        #[arg(long)]
+        direct: bool,
+        #[arg(last = true)]
+        ssh_args: Vec<String>,
     },
 }
 
@@ -228,6 +291,39 @@ fn run(cli: Cli) -> Result<i32> {
         Some(Cmd::List { json }) => client::ls(json).map(|_| 0),
         Some(Cmd::Detach { name }) => client::detach(&current_or_named(name, "detach")?).map(|_| 0),
         Some(Cmd::Kill { name }) => client::kill(&current_or_named(name, "kill")?).map(|_| 0),
+        Some(Cmd::Get { paths, to, force }) => transfer::get(&paths, to, force),
+        Some(Cmd::Put { paths, to, force }) => transfer::put(&paths, to, force),
+        Some(Cmd::Bridge { name }) => {
+            paths::validate_name(&name)?;
+            transfer::bridge(&name).map(|_| 0)
+        }
+        Some(Cmd::TransferEndpoint {
+            session,
+            host,
+            rterm,
+            cwd,
+            download_dir,
+            parent,
+            direct,
+            ssh_args,
+        }) => {
+            paths::validate_name(&session)?;
+            let cwd = match cwd {
+                Some(c) => c,
+                None => std::env::current_dir()?,
+            };
+            transfer::endpoint(transfer::EndpointArgs {
+                session,
+                host,
+                ssh_args,
+                rterm,
+                cwd,
+                download_dir,
+                parent,
+                direct,
+            })
+            .map(|_| 0)
+        }
         Some(Cmd::Daemon {
             name,
             rows,

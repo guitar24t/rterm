@@ -13,6 +13,10 @@ tools) copy by sending an OSC 52 escape sequence to the terminal, which many
 terminals ignore (GNOME Terminal and other VTE terminals, macOS Terminal).
 While attached, this script watches for those sequences and puts the text on
 this machine's clipboard itself. Everything else passes through untouched.
+
+File transfer: with Rob Terminal also installed on this machine, `rterm get`
+and `rterm put` in the session copy files to and from this machine. This
+script starts the local helper that serves them for as long as it runs.
 """
 
 import argparse
@@ -111,6 +115,31 @@ def ssh_command(args: argparse.Namespace, remote: str, tty: bool) -> List[str]:
         cmd.append("-t")
     cmd += [args.host, remote]
     return cmd
+
+
+def start_transfer_endpoint(args: argparse.Namespace, name: str) -> None:
+    """Serve `rterm get` and `rterm put` from the session, using the rterm
+    installed on this machine (if any). It reaches the session over its own
+    ssh connection (shared with ours when multiplexing), never touches the
+    terminal, and exits when this process does."""
+    local = shutil.which("rterm")
+    if args.no_transfer or local is None:
+        return
+    cmd = [
+        local, "__transfer-endpoint", "--session", name, "--host", args.host,
+        "--rterm", args.rterm, "--cwd", os.getcwd(), "--parent", str(os.getpid()),
+        "--", *args.mux, *args.ssh_args,
+    ]
+    options: dict = {}
+    if os.name == "nt":
+        options["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    else:
+        options["start_new_session"] = True  # Ctrl-C at the terminal is for the session
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, **options)
+    except OSError:
+        pass
 
 
 def rterm(args: argparse.Namespace, *argv: str) -> str:
@@ -577,6 +606,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                         help="don't share one ssh connection between listing and attaching")
     parser.add_argument("--no-clipboard", action="store_true",
                         help="don't copy OSC 52 clipboard writes to this machine's clipboard")
+    parser.add_argument("--no-transfer", action="store_true",
+                        help="don't serve `rterm get` and `rterm put` for this connection")
     parser.add_argument("host", help="ssh destination, e.g. myserver or user@host")
     parser.add_argument("ssh_args", nargs=argparse.REMAINDER,
                         help="extra ssh options, e.g. -p 2222")
@@ -608,6 +639,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.detach_key:
         remote += ["-e", args.detach_key]
     cmd = ssh_command(args, rterm(args, *remote), tty=True)
+    start_transfer_endpoint(args, name)
     sys.stdout.flush()
     if os.name == "nt":
         sys.exit(subprocess.call(cmd))

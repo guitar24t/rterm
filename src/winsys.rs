@@ -101,6 +101,27 @@ pub fn ignore_interrupts() {
     unsafe { SetConsoleCtrlHandler(Some(swallow_interrupts), 1) };
 }
 
+static INTERRUPTED: std::sync::OnceLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
+    std::sync::OnceLock::new();
+
+unsafe extern "system" fn note_interrupt(_ctrl: u32) -> i32 {
+    match INTERRUPTED.get() {
+        Some(flag) => {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Set `flag` on Ctrl-C, Ctrl-Break or the console closing, instead of
+/// exiting, so the program can clean up first.
+pub fn flag_interrupts(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    if INTERRUPTED.set(flag).is_ok() {
+        unsafe { SetConsoleCtrlHandler(Some(note_interrupt), 1) };
+    }
+}
+
 /// The console in raw VT mode: keys arrive as the bytes a Unix terminal
 /// would send, and escape sequences we write are interpreted. Restores the
 /// previous modes when dropped.

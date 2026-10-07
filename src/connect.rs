@@ -5,7 +5,9 @@
 //! connection and bridges OSC 52 copies to the local clipboard. This is the
 //! same tool for Windows, which has no Python by default, whose OpenSSH has
 //! no connection sharing, and whose Windows Terminal handles OSC 52 itself.
-//! It runs when rterm is invoked as `rterm-connect`.
+//! It runs when rterm is invoked as `rterm-connect`. Like the script, it
+//! starts the transfer endpoint that serves `rterm get` and `rterm put` from
+//! the session (see transfer.rs).
 
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -43,6 +45,9 @@ struct Args {
     /// Accepted for compatibility with rterm-connect.py; no effect here
     #[arg(long, hide = true)]
     no_clipboard: bool,
+    /// Don't serve `rterm get` and `rterm put` for this connection
+    #[arg(long)]
+    no_transfer: bool,
     /// ssh destination, e.g. myserver or user@host
     host: String,
     /// Extra ssh options, e.g. -p 2222
@@ -122,6 +127,9 @@ fn run(args: Args) -> Result<i32, String> {
         }
     };
 
+    let endpoint = (!args.no_transfer)
+        .then(|| start_transfer_endpoint(&args, &name))
+        .flatten();
     let mut remote = vec![args.rterm.clone(), "attach".into(), name];
     if let Some(key) = &args.detach_key {
         remote.extend(["-e".into(), key.clone()]);
@@ -132,8 +140,50 @@ fn run(args: Args) -> Result<i32, String> {
         .arg(&args.host)
         .arg(shell_join(&remote));
     let _ignore = IgnoreInterrupts::new();
-    let status = cmd.status().map_err(|e| format!("can't run ssh: {e}"))?;
-    Ok(status.code().unwrap_or(1))
+    let status = cmd.status().map_err(|e| format!("can't run ssh: {e}"));
+    if let Some(mut child) = endpoint {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    Ok(status?.code().unwrap_or(1))
+}
+
+/// Start the background process that serves `rterm get` and `rterm put`
+/// from the session (see transfer.rs). It reaches the session over its own
+/// ssh connection, so it needs a login that doesn't prompt.
+fn start_transfer_endpoint(args: &Args, name: &str) -> Option<std::process::Child> {
+    let exe = std::env::current_exe().ok()?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("__transfer-endpoint")
+        .args([
+            "--session",
+            name,
+            "--host",
+            &args.host,
+            "--rterm",
+            &args.rterm,
+        ])
+        .arg("--parent")
+        .arg(std::process::id().to_string());
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.arg("--cwd").arg(cwd);
+    }
+    cmd.arg("--")
+        .args(&args.ssh_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // Ctrl-C at the terminal is for the session
+    }
+    cmd.spawn().ok()
 }
 
 /// While ssh runs in the foreground, Ctrl-C belongs to it (and the remote).
