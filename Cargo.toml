@@ -1,6 +1,6 @@
 [package]
 name = "rterm"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Persistent terminal sessions that behave like a plain terminal"
 license = "MIT"
