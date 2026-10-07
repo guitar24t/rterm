@@ -841,6 +841,7 @@ fn kill_waits_for_the_session_and_ls_json() {
     assert!(env.run(&["ls", "--json"]).trim() == "[]");
     env.run(&["new", "-d", "j1", "--", "/bin/sh"]);
     // A program that ignores the hangup: kill must still finish (SIGKILL).
+    let ready = scratch("hup-ready").join("ready");
     env.run(&[
         "new",
         "-d",
@@ -848,8 +849,14 @@ fn kill_waits_for_the_session_and_ls_json() {
         "--",
         "/bin/sh",
         "-c",
-        "trap '' HUP; sleep 600",
+        &format!("trap '' HUP; touch '{}'; sleep 600", ready.display()),
     ]);
+    // A hangup before the trap is set would end it at once.
+    let start = Instant::now();
+    while !ready.exists() {
+        assert!(start.elapsed() < TIMEOUT, "the session never started");
+        thread::sleep(Duration::from_millis(20));
+    }
     let json = env.run(&["ls", "--json"]);
     assert!(
         json.starts_with("[{\"name\":\"j1\",\"status\":\"detached\""),
@@ -867,6 +874,7 @@ fn kill_waits_for_the_session_and_ls_json() {
     assert!(!json.contains("j2") && !json.contains("unknown"), "{json}");
     env.run(&["kill", "j1"]);
     assert_eq!(env.run(&["ls", "--json"]).trim(), "[]");
+    let _ = std::fs::remove_dir_all(ready.parent().unwrap());
 }
 
 #[test]
