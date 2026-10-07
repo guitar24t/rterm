@@ -518,11 +518,7 @@ impl Progress {
         }
         self.last_draw = Some(now);
         let secs = (now - self.started).as_secs_f64().max(0.001);
-        let pct = if self.total > 0 {
-            self.done * 100 / self.total
-        } else {
-            100
-        };
+        let pct = (self.done * 100).checked_div(self.total).unwrap_or(100);
         eprint!(
             "\r\x1b[K{} {}  {:>3}%  {}  {}/s",
             self.arrow,
