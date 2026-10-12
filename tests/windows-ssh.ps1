@@ -38,15 +38,17 @@ function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60
     [pscustomobject]@{ Code = $p.ExitCode; Text = $out.Result + $err.Result }
 }
 
-# rterm and rterm-connect on the user PATH, as the MSI installs them.
+# rterm and rterm-connect first on the PATH ssh logins get. (Not the user
+# PATH, where the MSI puts them: the runner has R on the machine PATH, and
+# Windows names are case-insensitive, so R's Rterm.exe would win.)
 $bin = Join-Path $env:RUNNER_TEMP 'rterm-bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
 $rterm = Join-Path $bin 'rterm.exe'
 $connect = Join-Path $bin 'rterm-connect.exe'
 Copy-Item $Binary $rterm
 Copy-Item $Binary $connect
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-[Environment]::SetEnvironmentVariable('Path', "$bin;$userPath", 'User')
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+[Environment]::SetEnvironmentVariable('Path', "$bin;$machinePath", 'Machine')
 $env:Path = "$bin;$env:Path"
 
 # An OpenSSH server on localhost that lets this user in with a key.
@@ -54,7 +56,7 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
     Write-Host 'Installing OpenSSH Server'
     Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop | Out-Null
 }
-Start-Service sshd -ErrorAction Stop
+Restart-Service sshd -ErrorAction Stop  # picks up the new PATH
 $sshDir = Join-Path $HOME '.ssh'
 New-Item -ItemType Directory -Force $sshDir | Out-Null
 $key = Join-Path $sshDir 'id_ed25519'
@@ -68,6 +70,8 @@ Add-Content -Path (Join-Path $sshDir 'config') -Encoding ascii -Value "Host loca
 Write-Host "ssh client: $((Get-Command ssh).Source) $(ssh -V 2>&1)"
 $r = Invoke-Native ssh @('-o', 'BatchMode=yes', 'localhost', 'echo', 'ssh-works')
 Assert ($r.Text -match 'ssh-works') 'ssh to localhost with a key' $r.Text
+$r = Invoke-Native ssh @('localhost', 'rterm --version')
+Assert ($r.Text -match '^rterm \d') 'ssh logins find our rterm' $r.Text
 
 function Set-HostShell([string] $shell) {
     $reg = 'HKLM:\SOFTWARE\OpenSSH'
