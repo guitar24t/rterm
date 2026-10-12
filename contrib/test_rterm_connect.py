@@ -113,7 +113,8 @@ class HostCommands(unittest.TestCase):
 
     def args(self):
         return type("Args", (), {
-            "rterm": "rterm", "mux": [], "ssh_args": [], "host": "winbox",
+            "rterm": "rterm", "rterm_cmd": "rterm", "mux": [], "ssh_args": [],
+            "host": "winbox",
         })()
 
     def test_quoting(self):
@@ -139,26 +140,51 @@ class HostCommands(unittest.TestCase):
         self.assertEqual(sent, ["rterm ls --json", "rterm ls"])
         self.assertEqual([s.name for s in sessions], ["main"])
 
-    def test_missing_on_a_windows_host_says_how_to_install_there(self):
+    POWERSHELL = ("rterm : The term 'rterm' is not recognized as the name of a cmdlet, ...\r\n"
+                  "    + FullyQualifiedErrorId : CommandNotFoundException\r\n")
+    CMD = ("'rterm' is not recognized as an internal or external command,\r\n"
+           "operable program or batch file.\r\n")
+    LISTING = '[{"name":"main","status":"detached","age_text":"9s","cols":80,"rows":24}]'
+
+    def list_on_windows(self, not_found, installed_at=None):
+        """List sessions on a Windows host whose ssh logins lack rterm on the
+        PATH; installed_at is the command form that finds it, if any."""
         import contextlib
         import io
         from unittest import mock
         sent = []
-        powershell = ("rterm : The term 'rterm' is not recognized as the name of a cmdlet, ...\r\n"
-                      "    + FullyQualifiedErrorId : CommandNotFoundException\r\n")
 
         def fake_run(cmd, **kw):
             sent.append(cmd[-1])
-            return rc.subprocess.CompletedProcess(cmd, 1, "", powershell)
+            if installed_at and cmd[-1] == f"{installed_at} ls --json":
+                return rc.subprocess.CompletedProcess(cmd, 0, self.LISTING, "")
+            return rc.subprocess.CompletedProcess(cmd, 1, "", not_found)
 
-        err = io.StringIO()
-        with mock.patch.object(rc.subprocess, "run", fake_run), \
-                contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
-            rc.list_sessions(self.args())
-        self.assertEqual(sent, ["rterm ls --json"])
-        self.assertIn("winbox runs Windows", err.getvalue())
-        self.assertIn("releases/latest", err.getvalue())
+        args, err = self.args(), io.StringIO()
+        with mock.patch.object(rc.subprocess, "run", fake_run), contextlib.redirect_stderr(err):
+            try:
+                sessions = rc.list_sessions(args)
+            except SystemExit:
+                sessions = None
+        return sent, sessions, args, err.getvalue()
 
+    def test_powershell_host_runs_rterm_from_where_the_msi_put_it(self):
+        sent, sessions, args, _ = self.list_on_windows(self.POWERSHELL, rc.MSI_RTERM[0])
+        self.assertEqual(sent, ["rterm ls --json", f"{rc.MSI_RTERM[0]} ls --json"])
+        self.assertEqual([s.name for s in sessions], ["main"])
+        self.assertEqual(rc.rterm(args, "attach", "main"), f"{rc.MSI_RTERM[0]} attach main")
+
+    def test_cmd_host_tries_cmds_syntax_first(self):
+        sent, sessions, args, _ = self.list_on_windows(self.CMD, rc.MSI_RTERM[1])
+        self.assertEqual(sent, ["rterm ls --json", f"{rc.MSI_RTERM[1]} ls --json"])
+        self.assertEqual(args.rterm_cmd, rc.MSI_RTERM[1])
+
+    def test_missing_on_a_windows_host_says_how_to_install_there(self):
+        sent, sessions, _, err = self.list_on_windows(self.POWERSHELL)
+        self.assertIsNone(sessions)
+        self.assertEqual(len(sent), 3)
+        self.assertIn("winbox runs Windows", err)
+        self.assertIn("releases/latest", err)
 
 if __name__ == "__main__":
     unittest.main()

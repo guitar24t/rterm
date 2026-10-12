@@ -590,6 +590,14 @@ dialog couldn't be shown: the error says why. On Linux it needs `zenity` (or
 so the helper logs in separately, without prompting; that works with key or
 agent logins but not passwords.
 
+**rterm-connect says rterm isn't installed on a Windows host.** The MSI
+installs for one Windows account, so install it signed in as the account you
+ssh in as. Windows OpenSSH 10.0 also leaves that account's own PATH out of
+ssh logins; rterm-connect copes by running rterm from where the MSI puts it
+(`%LOCALAPPDATA%\Programs\Rob Terminal`), and sessions add that folder to
+their PATH so `rterm get` and the rest work inside them. Outside a session,
+a plain ssh login to such a host needs the full path to run rterm.
+
 **Ctrl-\\ is a key I need.** Choose another with `-e` or `RTERM_DETACH_KEY`,
 or turn it off with `-e none`.
 

@@ -537,6 +537,28 @@ fn default_shell_is_powershell_or_the_openssh_default() {
     env.run(&["kill", "dflt"]);
 }
 
+/// A session can run rterm (for get, put, detach) even when the PATH it was
+/// started with lacks rterm's folder, as Windows OpenSSH 10.0 does for ssh
+/// logins: the session's PATH gets that folder added.
+#[test]
+fn sessions_find_rterm_without_it_on_the_path() {
+    let env = Env::new();
+    let mut vars = env.vars();
+    vars.push(("PATH".into(), r"C:\Windows\System32;C:\Windows".into()));
+    let mut a = Outer::spawn(
+        env!("CARGO_BIN_EXE_rterm"),
+        &["new", "nopath", "--", "cmd.exe", "/d"],
+        &vars,
+        24,
+        200,
+    );
+    a.wait_prompt();
+    a.send("rterm --version\r");
+    a.wait_line(&format!("rterm {}", env!("CARGO_PKG_VERSION")));
+    a.send("exit\r");
+    assert_eq!(a.wait_exit(), 0);
+}
+
 /// `rterm get` and `rterm put` as run in session `session` (they find it
 /// through RTERM_SESSION), with the transfer endpoint talking to the
 /// session directly instead of over ssh.
