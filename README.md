@@ -631,7 +631,11 @@ RTERM_E2E_APP='vim -u NONE' cargo test --test e2e real_app -- --ignored --nocapt
 The end-to-end tests run the real binary on a pseudo-terminal whose other side
 is an in-memory terminal, and check that detaching and reattaching reproduces
 the screen exactly. `real_app_roundtrip` does the same for any program you
-name (vim, less, codex, claude, ...).
+name (vim, less, codex, claude, ...). `tests/windows-ssh.ps1` sets up an
+OpenSSH server on Windows and checks session listing, sessions outliving
+their ssh connection, and file transfers over real ssh with cmd.exe, Windows
+PowerShell and PowerShell 7 as the host's shell; CI runs it on a throwaway
+runner.
 
 ### Releasing
 
