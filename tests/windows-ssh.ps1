@@ -21,6 +21,7 @@ function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60
     $psi = [Diagnostics.ProcessStartInfo]::new($exe)
     foreach ($a in $arguments) { $psi.ArgumentList.Add($a) }
     $psi.UseShellExecute = $false
+    $psi.WorkingDirectory = (Get-Location).ProviderPath  # Push-Location doesn't set the process's
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
