@@ -38,9 +38,13 @@ INSTALL_HINT = "curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo s
 WINDOWS_INSTALL = "https://github.com/guitar24t/rterm/releases/latest"
 # rterm where the MSI installs it, in PowerShell's syntax and in cmd.exe's,
 # for Windows hosts whose ssh logins don't get the user's own PATH (as with
-# Windows OpenSSH 10.0, which gives them the service's).
+# Windows OpenSSH 10.0, which gives them the service's). When attaching, with
+# a terminal, Windows OpenSSH starts the shell through conhost, which splits
+# the command into words and joins them again, quoting only words with
+# spaces; PowerShell then drops those quotes. So PowerShell's form has no
+# double quotes, and cmd.exe's keeps its path, spaces and all, in one.
 MSI_RTERM = [
-    '& "$env:LOCALAPPDATA\\Programs\\Rob Terminal\\rterm.exe"',
+    "& (Join-Path $env:LOCALAPPDATA 'Programs\\Rob Terminal\\rterm.exe')",
     '"%LOCALAPPDATA%\\Programs\\Rob Terminal\\rterm.exe"',
 ]
 NAME_RE = re.compile(r"^(?![.-])[A-Za-z0-9._@+-]{1,64}\Z")

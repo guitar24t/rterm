@@ -19,9 +19,13 @@ const INSTALL_HINT: &str = "curl -fsSL https://guitar24t.github.io/rterm/install
 const WINDOWS_INSTALL: &str = "https://github.com/guitar24t/rterm/releases/latest";
 /// rterm where the MSI installs it, in PowerShell's syntax and in cmd.exe's,
 /// for Windows hosts whose ssh logins don't get the user's own PATH (as with
-/// Windows OpenSSH 10.0, which gives them the service's).
+/// Windows OpenSSH 10.0, which gives them the service's). When attaching,
+/// with a terminal, Windows OpenSSH starts the shell through conhost, which
+/// splits the command into words and joins them again, quoting only words
+/// with spaces; PowerShell then drops those quotes. So PowerShell's form has
+/// no double quotes, and cmd.exe's keeps its path, spaces and all, in one.
 const MSI_RTERM: [&str; 2] = [
-    r#"& "$env:LOCALAPPDATA\Programs\Rob Terminal\rterm.exe""#,
+    r"& (Join-Path $env:LOCALAPPDATA 'Programs\Rob Terminal\rterm.exe')",
     r#""%LOCALAPPDATA%\Programs\Rob Terminal\rterm.exe""#,
 ];
 const DEFAULT_NAME: &str = "main";
@@ -581,6 +585,17 @@ mod tests {
         );
         assert_eq!(shell_join(&["^a".into(), "^]".into()]), "\"^a\" \"^]\"");
         assert_eq!(shell_join(&["it's".into()]), "\"it's\"");
+    }
+
+    #[test]
+    fn msi_forms_survive_attaching() {
+        // See MSI_RTERM.
+        assert!(!MSI_RTERM[0].contains('"'));
+        // contrib/rterm-connect.py runs rterm the same ways.
+        let python = include_str!("../contrib/rterm-connect.py");
+        for form in MSI_RTERM {
+            assert!(python.contains(&form.replace('\\', r"\\")), "{form}");
+        }
     }
 
     #[test]

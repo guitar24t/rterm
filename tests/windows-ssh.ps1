@@ -17,8 +17,9 @@ function Assert($condition, [string] $message, [string] $detail = '') {
 }
 
 # Run a program with stdin closed, output captured, and a time limit (a
-# leaked pipe handle would otherwise hang the job).
-function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60) {
+# leaked pipe handle would otherwise hang the job). With -Terminal, stdin
+# stays open instead: a terminal ssh -tt asks for goes away when it closes.
+function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60, [switch] $Terminal) {
     $psi = [Diagnostics.ProcessStartInfo]::new($exe)
     foreach ($a in $arguments) { $psi.ArgumentList.Add($a) }
     $psi.UseShellExecute = $false
@@ -27,7 +28,7 @@ function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $p = [Diagnostics.Process]::Start($psi)
-    $p.StandardInput.Close()
+    if (-not $Terminal) { $p.StandardInput.Close() }
     $out = $p.StandardOutput.ReadToEndAsync()
     $err = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($seconds * 1000)) {
@@ -91,10 +92,10 @@ function Set-HostShell([string] $shell) {
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $userPathWithoutRterm = ($userPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $installDir.TrimEnd('\') }) -join ';'
 Assert ($userPathWithoutRterm -ne $userPath) 'the MSI put rterm on the user PATH'
-$msiRterm = @{
-    cmd        = '"%LOCALAPPDATA%\Programs\Rob Terminal\rterm.exe"'
-    powershell = '& "$env:LOCALAPPDATA\Programs\Rob Terminal\rterm.exe"'
-}
+# How both clients then run rterm where the MSI put it.
+$forms = python -c "import runpy, sys; print('\n'.join(runpy.run_path(sys.argv[1])['MSI_RTERM']))" "$repo\contrib\rterm-connect.py"
+Assert ($forms.Count -eq 2) 'read the forms from rterm-connect.py' "$forms"
+$msiRterm = @{ powershell = $forms[0]; cmd = $forms[1] }
 
 $shells = [ordered]@{
     'cmd.exe'            = ''
@@ -135,6 +136,11 @@ foreach ($shell in $shells.GetEnumerator()) {
     Assert ($r.Code -eq 0 -and $r.Text -match $name) "rterm-connect.py finds rterm where the MSI put it [$label]" $r.Text
     $r = Invoke-Native $connect @('--list', 'localhost')
     Assert ($r.Code -eq 0 -and $r.Text -match $name) "rterm-connect.exe finds rterm where the MSI put it [$label]" $r.Text
+    # Attaching asks for a terminal, and then conhost re-quotes the command
+    # before the shell sees it (see MSI_RTERM in the clients).
+    $msi = $msiRterm[$(if ($label -eq 'cmd.exe') { 'cmd' } else { 'powershell' })]
+    $r = Invoke-Native ssh @('-tt', 'localhost', "$msi attach -x no-such-session") -Terminal
+    Assert ($r.Text -match 'no session named') "attaching runs rterm where the MSI put it [$label]" $r.Text
 
     # rterm get / put in that session, served by the endpoint that
     # rterm-connect.exe starts (as itself) over its own ssh connection,
@@ -150,7 +156,7 @@ foreach ($shell in $shells.GetEnumerator()) {
     $psi = [Diagnostics.ProcessStartInfo]::new($connect)
     foreach ($a in @('__transfer-endpoint', '--session', $name, '--host', 'localhost',
             '--download-dir', $dl, '--cwd', $laptop, '--parent', $PID,
-            '--rterm', $msiRterm[$(if ($label -eq 'cmd.exe') { 'cmd' } else { 'powershell' })])) {
+            '--rterm', $msi)) {
         $psi.ArgumentList.Add($a)
     }
     $psi.UseShellExecute = $false

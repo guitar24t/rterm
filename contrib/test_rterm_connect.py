@@ -174,6 +174,10 @@ class HostCommands(unittest.TestCase):
         self.assertEqual([s.name for s in sessions], ["main"])
         self.assertEqual(rc.rterm(args, "attach", "main"), f"{rc.MSI_RTERM[0]} attach main")
 
+    def test_msi_forms_survive_attaching(self):
+        # See MSI_RTERM.
+        self.assertNotIn('"', rc.MSI_RTERM[0])
+
     def test_cmd_host_tries_cmds_syntax_first(self):
         sent, sessions, args, _ = self.list_on_windows(self.CMD, rc.MSI_RTERM[1])
         self.assertEqual(sent, ["rterm ls --json", f"{rc.MSI_RTERM[1]} ls --json"])
