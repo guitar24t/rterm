@@ -86,6 +86,16 @@ function Set-HostShell([string] $shell) {
     }
 }
 
+# Windows OpenSSH 10.0 leaves the user's own PATH out of ssh logins; taking
+# rterm off the user PATH does the same to it here.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$userPathWithoutRterm = ($userPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $installDir.TrimEnd('\') }) -join ';'
+Assert ($userPathWithoutRterm -ne $userPath) 'the MSI put rterm on the user PATH'
+$msiRterm = @{
+    cmd        = '"%LOCALAPPDATA%\Programs\Rob Terminal\rterm.exe"'
+    powershell = '& "$env:LOCALAPPDATA\Programs\Rob Terminal\rterm.exe"'
+}
+
 $shells = [ordered]@{
     'cmd.exe'            = ''
     'Windows PowerShell' = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -116,8 +126,19 @@ foreach ($shell in $shells.GetEnumerator()) {
     $r = Invoke-Native $connect @('--list', 'localhost')
     Assert ($r.Text -match $name) "$name outlives its ssh connection [$label]" $r.Text
 
+    # Without rterm on the login's PATH, the pickers run it from where the
+    # MSI put it, and the transfer endpoint (below) is told to do the same.
+    [Environment]::SetEnvironmentVariable('Path', $userPathWithoutRterm, 'User')
+    $r = Invoke-Native ssh @('localhost', 'rterm --version')
+    Assert ($r.Code -ne 0) "ssh logins no longer find rterm on the PATH [$label]" $r.Text
+    $r = Invoke-Native python @("$repo\contrib\rterm-connect.py", '--list', 'localhost')
+    Assert ($r.Code -eq 0 -and $r.Text -match $name) "rterm-connect.py finds rterm where the MSI put it [$label]" $r.Text
+    $r = Invoke-Native $connect @('--list', 'localhost')
+    Assert ($r.Code -eq 0 -and $r.Text -match $name) "rterm-connect.exe finds rterm where the MSI put it [$label]" $r.Text
+
     # rterm get / put in that session, served by the endpoint that
-    # rterm-connect.exe starts (as itself) over its own ssh connection.
+    # rterm-connect.exe starts (as itself) over its own ssh connection,
+    # running rterm on the host as rterm-connect.exe found it.
     $root = Join-Path $env:RUNNER_TEMP "xfer$n"
     $work, $dl, $laptop = "$root\work", "$root\dl", "$root\laptop"
     New-Item -ItemType Directory -Force $work, $dl, $laptop | Out-Null
@@ -128,7 +149,8 @@ foreach ($shell in $shells.GetEnumerator()) {
     [IO.File]::WriteAllText("$laptop\photo.jpg", 'jpeg bytes')
     $psi = [Diagnostics.ProcessStartInfo]::new($connect)
     foreach ($a in @('__transfer-endpoint', '--session', $name, '--host', 'localhost',
-            '--download-dir', $dl, '--cwd', $laptop, '--parent', $PID)) {
+            '--download-dir', $dl, '--cwd', $laptop, '--parent', $PID,
+            '--rterm', $msiRterm[$(if ($label -eq 'cmd.exe') { 'cmd' } else { 'powershell' })])) {
         $psi.ArgumentList.Add($a)
     }
     $psi.UseShellExecute = $false
@@ -154,6 +176,7 @@ foreach ($shell in $shells.GetEnumerator()) {
     Remove-Item env:RTERM_SESSION
 
     $endpoint.Kill($true)
+    [Environment]::SetEnvironmentVariable('Path', $userPath, 'User')
     $r = Invoke-Native $rterm @('kill', $name)
     Assert ($r.Code -eq 0) "killed $name [$label]" $r.Text
 }

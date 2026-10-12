@@ -36,6 +36,13 @@ from typing import Callable, List, NoReturn, Optional, Tuple
 
 INSTALL_HINT = "curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh"
 WINDOWS_INSTALL = "https://github.com/guitar24t/rterm/releases/latest"
+# rterm where the MSI installs it, in PowerShell's syntax and in cmd.exe's,
+# for Windows hosts whose ssh logins don't get the user's own PATH (as with
+# Windows OpenSSH 10.0, which gives them the service's).
+MSI_RTERM = [
+    '& "$env:LOCALAPPDATA\\Programs\\Rob Terminal\\rterm.exe"',
+    '"%LOCALAPPDATA%\\Programs\\Rob Terminal\\rterm.exe"',
+]
 NAME_RE = re.compile(r"^(?![.-])[A-Za-z0-9._@+-]{1,64}\Z")
 DEFAULT_NAME = "main"
 
@@ -128,7 +135,7 @@ def start_transfer_endpoint(args: argparse.Namespace, name: str) -> None:
         return
     cmd = [
         local, "__transfer-endpoint", "--session", name, "--host", args.host,
-        "--rterm", args.rterm, "--cwd", os.getcwd(), "--parent", str(os.getpid()),
+        "--rterm", args.rterm_cmd, "--cwd", os.getcwd(), "--parent", str(os.getpid()),
         "--", *args.mux, *args.ssh_args,
     ]
     options: dict = {}
@@ -157,7 +164,7 @@ def host_quote(word: str) -> str:
 
 def rterm(args: argparse.Namespace, *argv: str) -> str:
     """A quoted rterm command line to run on the host."""
-    return " ".join(host_quote(a) for a in (args.rterm, *argv))
+    return " ".join([args.rterm_cmd, *(host_quote(a) for a in argv)])
 
 
 def run_remote(args: argparse.Namespace, remote: str) -> subprocess.CompletedProcess:
@@ -181,9 +188,21 @@ def windows_not_found(stderr: str) -> bool:
 def list_sessions(args: argparse.Namespace) -> List[Session]:
     # Separate ssh commands rather than `a 2>/dev/null || b`, which the
     # host's shell may not understand: Windows OpenSSH runs cmd.exe or
-    # PowerShell.
+    # PowerShell. On a Windows host where `rterm` isn't found, also try where
+    # the MSI installs it, and if that works, run it from there from now on.
     result = run_remote(args, rterm(args, "ls", "--json"))
-    if result.returncode not in (0, 127, 255) and not windows_not_found(result.stderr):
+    # The host's shell answered, and it is cmd.exe or PowerShell.
+    windows = result.returncode not in (0, 127, 255) and (
+        windows_not_found(result.stderr) or "\r\n" in result.stderr)
+    if windows and args.rterm == "rterm":
+        tries = MSI_RTERM[::-1] if "internal or external command" in result.stderr else MSI_RTERM
+        for msi in tries:
+            found = run_remote(args, f"{msi} ls --json")
+            if found.returncode == 0:
+                args.rterm_cmd = msi
+                result = found
+                break
+    elif result.returncode not in (0, 127, 255):
         # Hosts running rterm 0.1.0 don't know --json; fall back to the table.
         result = run_remote(args, rterm(args, "ls"))
     host = args.host
@@ -662,6 +681,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
     style = Style(sys.stdout.isatty() and "NO_COLOR" not in os.environ)
     args.mux = mux_options(args)
+    args.rterm_cmd = host_quote(args.rterm)  # how to run rterm on the host
 
     if args.session:
         name = args.session

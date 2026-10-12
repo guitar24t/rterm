@@ -374,6 +374,31 @@ fn find_in_path(program: &str) -> Option<OsString> {
         .map(PathBuf::into_os_string)
 }
 
+/// `path` (a PATH value) with `dir` added at the end, or None if it already
+/// has it. Sessions get the installed rterm's folder this way, so `rterm get`
+/// and the rest work in them even when the ssh login's PATH leaves it out
+/// (Windows OpenSSH 10.0 gives logins the service's PATH, without the user's
+/// own entries).
+pub fn path_with(path: Option<&OsStr>, dir: &Path) -> Option<OsString> {
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase()
+    };
+    let want = norm(dir);
+    if let Some(path) = path
+        && std::env::split_paths(path).any(|d| norm(&d) == want)
+    {
+        return None;
+    }
+    let mut out = path.map(OsStr::to_os_string).unwrap_or_default();
+    if !out.is_empty() && !out.to_string_lossy().ends_with(';') {
+        out.push(";");
+    }
+    out.push(dir);
+    Some(out)
+}
+
 /// The shell a new session starts: `RTERM_SHELL`, else OpenSSH's configured
 /// default shell (as an ssh login would get), else PowerShell, else cmd.
 pub fn default_shell() -> Vec<OsString> {
@@ -664,7 +689,16 @@ pub fn spawn_daemon(exe: &Path, args: &[OsString], log: &File) -> io::Result<Dae
 
     let mut argv = vec![exe.as_os_str().to_owned()];
     argv.extend(args.iter().cloned());
-    let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | EXTENDED_STARTUPINFO_PRESENT;
+    // Put the installed rterm's folder on the session's PATH (the daemon runs
+    // from a copy elsewhere, so it has to be done here); see path_with.
+    let env_block = std::env::current_exe()
+        .ok()
+        .and_then(|me| path_with(std::env::var_os("PATH").as_deref(), me.parent()?))
+        .map(|path| environment_block(&[("PATH", Some(path))]));
+    let mut base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | EXTENDED_STARTUPINFO_PRESENT;
+    if env_block.is_some() {
+        base |= CREATE_UNICODE_ENVIRONMENT;
+    }
     let mut result = Err(io::Error::other("no attempt made"));
     for flags in [base | CREATE_BREAKAWAY_FROM_JOB, base] {
         let mut attrs = Attributes::new()?;
@@ -690,7 +724,9 @@ pub fn spawn_daemon(exe: &Path, args: &[OsString], log: &File) -> io::Result<Dae
                 ptr::null(),
                 1,
                 flags,
-                ptr::null(),
+                env_block
+                    .as_ref()
+                    .map_or(ptr::null(), |b| b.as_ptr() as *const c_void),
                 ptr::null(),
                 &startup.StartupInfo,
                 &mut info,
@@ -738,6 +774,25 @@ mod tests {
         let mut w = command_line(&argv);
         w.pop();
         String::from_utf16(&w).unwrap()
+    }
+
+    #[test]
+    fn adds_rterms_folder_to_path_once() {
+        let dir = Path::new(r"C:\Users\R\AppData\Local\Programs\Rob Terminal");
+        let os = |s: &str| OsString::from(s);
+        assert_eq!(
+            path_with(Some(&os(r"C:\WINDOWS\system32;C:\WINDOWS")), dir),
+            Some(os(
+                r"C:\WINDOWS\system32;C:\WINDOWS;C:\Users\R\AppData\Local\Programs\Rob Terminal"
+            ))
+        );
+        assert_eq!(
+            path_with(Some(&os(r"C:\a;")), dir),
+            Some(os(r"C:\a;C:\Users\R\AppData\Local\Programs\Rob Terminal"))
+        );
+        assert_eq!(path_with(None, dir), Some(dir.as_os_str().to_owned()));
+        let has = os(r"C:\a;c:\users\r\appdata\local\programs\rob terminal\;C:\b");
+        assert_eq!(path_with(Some(&has), dir), None);
     }
 
     #[test]

@@ -17,6 +17,13 @@ use clap::Parser;
 
 const INSTALL_HINT: &str = "curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh";
 const WINDOWS_INSTALL: &str = "https://github.com/guitar24t/rterm/releases/latest";
+/// rterm where the MSI installs it, in PowerShell's syntax and in cmd.exe's,
+/// for Windows hosts whose ssh logins don't get the user's own PATH (as with
+/// Windows OpenSSH 10.0, which gives them the service's).
+const MSI_RTERM: [&str; 2] = [
+    r#"& "$env:LOCALAPPDATA\Programs\Rob Terminal\rterm.exe""#,
+    r#""%LOCALAPPDATA%\Programs\Rob Terminal\rterm.exe""#,
+];
 const DEFAULT_NAME: &str = "main";
 
 #[derive(Parser)]
@@ -113,13 +120,15 @@ fn run(args: Args) -> Result<i32, String> {
     crate::winsys::enable_vt_output();
     let style = Style(io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none());
 
+    // The command that runs rterm on the host (see list_sessions).
+    let mut rterm = shell_join(std::slice::from_ref(&args.rterm));
     let name = match &args.session {
         Some(n) => {
             crate::paths::validate_name(n).map_err(|e| e.to_string())?;
             n.clone()
         }
         None => {
-            let sessions = list_sessions(&args)?;
+            let sessions = list_sessions(&args, &mut rterm)?;
             if args.list {
                 print_sessions(&sessions, &args.host, &style, false);
                 return Ok(0);
@@ -129,9 +138,9 @@ fn run(args: Args) -> Result<i32, String> {
     };
 
     let endpoint = (!args.no_transfer)
-        .then(|| start_transfer_endpoint(&args, &name))
+        .then(|| start_transfer_endpoint(&args, &rterm, &name))
         .flatten();
-    let mut remote = vec![args.rterm.clone(), "attach".into(), name];
+    let mut remote = vec!["attach".into(), name];
     if let Some(key) = &args.detach_key {
         remote.extend(["-e".into(), key.clone()]);
     }
@@ -139,7 +148,7 @@ fn run(args: Args) -> Result<i32, String> {
     cmd.args(&args.ssh_args)
         .arg("-t")
         .arg(&args.host)
-        .arg(shell_join(&remote));
+        .arg(format!("{rterm} {}", shell_join(&remote)));
     let _ignore = IgnoreInterrupts::new();
     let status = cmd.status().map_err(|e| format!("can't run ssh: {e}"));
     if let Some(mut child) = endpoint {
@@ -152,18 +161,11 @@ fn run(args: Args) -> Result<i32, String> {
 /// Start the background process that serves `rterm get` and `rterm put`
 /// from the session (see transfer.rs). It reaches the session over its own
 /// ssh connection, so it needs a login that doesn't prompt.
-fn start_transfer_endpoint(args: &Args, name: &str) -> Option<std::process::Child> {
+fn start_transfer_endpoint(args: &Args, rterm: &str, name: &str) -> Option<std::process::Child> {
     let exe = std::env::current_exe().ok()?;
     let mut cmd = Command::new(exe);
     cmd.arg("__transfer-endpoint")
-        .args([
-            "--session",
-            name,
-            "--host",
-            &args.host,
-            "--rterm",
-            &args.rterm,
-        ])
+        .args(["--session", name, "--host", &args.host, "--rterm", rterm])
         .arg("--parent")
         .arg(std::process::id().to_string());
     if let Ok(cwd) = std::env::current_dir() {
@@ -236,13 +238,13 @@ fn shell_join(words: &[String]) -> String {
         .join(" ")
 }
 
-fn ssh_output(args: &Args, remote: &[String]) -> Result<(i32, String, String), String> {
+fn ssh_output(args: &Args, command: &str) -> Result<(i32, String, String), String> {
     // Capturing stderr hides no prompts: ssh asks for passwords on the
     // console (Windows) or terminal (Unix) directly.
     let out = Command::new("ssh")
         .args(&args.ssh_args)
         .arg(&args.host)
-        .arg(shell_join(remote))
+        .arg(command)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("can't run ssh: {e}"))?;
@@ -259,14 +261,36 @@ fn windows_not_found(stderr: &str) -> bool {
 }
 
 /// Separate ssh commands rather than `a || b`, which the host's shell may
-/// not understand: Windows OpenSSH runs cmd.exe or PowerShell.
-fn list_sessions(args: &Args) -> Result<Vec<Session>, String> {
-    let rterm = args.rterm.clone();
-    let (mut code, mut out, mut err) =
-        ssh_output(args, &[rterm.clone(), "ls".into(), "--json".into()])?;
-    if ![0, 127, 255].contains(&code) && !windows_not_found(&err) {
+/// not understand: Windows OpenSSH runs cmd.exe or PowerShell. On a Windows
+/// host where `rterm` isn't found, also try where the MSI installs it, and
+/// if that works, set `rterm` to run it from there.
+fn list_sessions(args: &Args, rterm: &mut String) -> Result<Vec<Session>, String> {
+    let ls = |rterm: &str, json: bool| {
+        ssh_output(
+            args,
+            &format!("{rterm} ls{}", if json { " --json" } else { "" }),
+        )
+    };
+    let (mut code, mut out, mut err) = ls(rterm, true)?;
+    // The host's shell answered, and it is cmd.exe or PowerShell.
+    let windows =
+        ![0, 127, 255].contains(&code) && (windows_not_found(&err) || err.contains("\r\n"));
+    if windows && args.rterm == "rterm" {
+        let mut tries = MSI_RTERM;
+        if err.contains("internal or external command") {
+            tries.reverse(); // cmd.exe's message
+        }
+        for msi in tries {
+            let (c, o, _) = ls(msi, true)?;
+            if c == 0 {
+                (code, out) = (0, o);
+                *rterm = msi.to_owned();
+                break;
+            }
+        }
+    } else if ![0, 127, 255].contains(&code) && !windows {
         // rterm 0.1.0 doesn't know --json; read its table instead.
-        (code, out, err) = ssh_output(args, &[rterm, "ls".into()])?;
+        (code, out, err) = ls(rterm, false)?;
     }
     let host = &args.host;
     if code == 0 {
