@@ -943,7 +943,18 @@ fn rterm_connect_name_still_runs_the_transfer_endpoint() {
     let exe = dir.join("rterm-connect");
     std::fs::copy(env!("CARGO_BIN_EXE_rterm"), &exe).unwrap();
     let help = |args: &[&str]| {
-        let out = Command::new(&exe).args(args).output().unwrap();
+        // Another test forking while the copy was open for writing leaves
+        // the child holding it until it execs: "Text file busy" meanwhile.
+        let mut tries = 0;
+        let out = loop {
+            match Command::new(&exe).args(args).output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 50 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                result => break result.unwrap(),
+            }
+        };
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
     assert!(help(&["--help"]).contains("Choose an rterm session"));
