@@ -107,5 +107,38 @@ class Names(unittest.TestCase):
             self.assertFalse(rc.NAME_RE.match(bad), bad)
 
 
+class HostCommands(unittest.TestCase):
+    """Commands sent to the host must work in POSIX shells, cmd.exe and
+    PowerShell alike."""
+
+    def args(self):
+        return type("Args", (), {
+            "rterm": "rterm", "mux": [], "ssh_args": [], "host": "winbox",
+        })()
+
+    def test_quoting(self):
+        self.assertEqual(rc.host_quote("main"), "main")
+        self.assertEqual(rc.host_quote("^a"), '"^a"')
+        self.assertEqual(rc.host_quote("^]"), '"^]"')
+        self.assertEqual(rc.host_quote("it's"), '"it\'s"')
+        self.assertEqual(rc.host_quote("^\\"), "'^\\'")
+
+    def test_listing_uses_one_plain_command_at_a_time(self):
+        from unittest import mock
+        sent = []
+
+        def fake_run(cmd, **kw):
+            sent.append(cmd[-1])
+            # A host whose rterm predates --json: the first try fails.
+            ok = not cmd[-1].endswith("--json")
+            out = "NAME STATUS AGE SIZE TITLE\nmain detached 9s 80x24 -zsh\n" if ok else ""
+            return rc.subprocess.CompletedProcess(cmd, 0 if ok else 2, out, "usage")
+
+        with mock.patch.object(rc.subprocess, "run", fake_run):
+            sessions = rc.list_sessions(self.args())
+        self.assertEqual(sent, ["rterm ls --json", "rterm ls"])
+        self.assertEqual([s.name for s in sessions], ["main"])
+
+
 if __name__ == "__main__":
     unittest.main()

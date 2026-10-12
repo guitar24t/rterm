@@ -142,21 +142,44 @@ def start_transfer_endpoint(args: argparse.Namespace, name: str) -> None:
         pass
 
 
+def host_quote(word: str) -> str:
+    """Quote a word for the host's shell. Plain words stay bare and most
+    others go in double quotes, which POSIX shells, cmd.exe and PowerShell
+    all read the same way; only words with characters special inside double
+    quotes to one of them fall back to POSIX single quotes."""
+    if re.fullmatch(r"[A-Za-z0-9\-_./:=@+,]+", word):
+        return word
+    if not any(c in word for c in '"\\$`%!'):
+        return f'"{word}"'
+    return shlex.quote(word)
+
+
 def rterm(args: argparse.Namespace, *argv: str) -> str:
-    """A shell-quoted rterm command line to run on the host."""
-    return " ".join(shlex.quote(a) for a in (args.rterm, *argv))
+    """A quoted rterm command line to run on the host."""
+    return " ".join(host_quote(a) for a in (args.rterm, *argv))
 
 
-def list_sessions(args: argparse.Namespace) -> List[Session]:
-    # Hosts running rterm 0.1.0 don't know --json; fall back to the table.
-    remote = f"{rterm(args, 'ls', '--json')} 2>/dev/null || {rterm(args, 'ls')}"
+def run_remote(args: argparse.Namespace, remote: str, quiet: bool) -> subprocess.CompletedProcess:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ssh_command(args, remote, tty=False),
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE if quiet else None, text=True,
         )
     except OSError as e:
         fail(f"can't run ssh: {e}")
+
+
+def list_sessions(args: argparse.Namespace) -> List[Session]:
+    # Separate ssh commands rather than `a 2>/dev/null || b`, which the
+    # host's shell may not understand: Windows OpenSSH runs cmd.exe or
+    # PowerShell. (ssh asks for passwords on the terminal, not stderr.)
+    result = run_remote(args, rterm(args, "ls", "--json"), quiet=True)
+    if result.returncode in (127, 255):
+        sys.stderr.write(result.stderr)
+    elif result.returncode != 0:
+        # Hosts running rterm 0.1.0 don't know --json; fall back to the table.
+        result = run_remote(args, rterm(args, "ls"), quiet=False)
     if result.returncode == 127:
         fail(f"rterm is not installed on {args.host} (or not on its PATH; see --rterm).\n"
              f"Install it there with:\n  {INSTALL_HINT}")

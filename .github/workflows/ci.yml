@@ -34,6 +34,20 @@ jobs:
         if: runner.os == 'Linux'
         run: python3 -m unittest discover -s contrib -v
 
+  # Windows as a host and as the computer, through a real OpenSSH server.
+  ssh-windows:
+    name: Test over ssh (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - name: Sessions, pickers and transfers over ssh
+        shell: pwsh
+        run: ./tests/windows-ssh.ps1 -Binary target/debug/rterm.exe
+
   # Build, sign (with a throwaway key) and install-test the packages on
   # every change, so a release can't be the first time packaging runs.
   packages:
