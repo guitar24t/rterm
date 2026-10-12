@@ -40,6 +40,8 @@ Invoke-Msiexec @('/i', "`"$Msi`"")
 $reported = (& $rterm --version)
 Assert ($reported -eq "rterm $Version") "upgraded in place to $Version (got '$reported')"
 Assert ((& (Join-Path $installDir 'rterm-connect.exe') --help) -match 'Choose an rterm session') 'rterm-connect.exe runs'
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+Assert ($userPath -split ';' -contains $installDir.TrimEnd('\') -or $userPath -split ';' -contains "$installDir\") "install folder is still on the user PATH after the upgrade:`n$userPath"
 $list = (& $rterm ls) -join "`n"
 Assert ($list -match 'upgrade-survivor') "the session started before the upgrade is still running:`n$list"
 & $rterm kill upgrade-survivor
