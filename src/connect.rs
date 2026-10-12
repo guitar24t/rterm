@@ -212,8 +212,10 @@ impl Drop for IgnoreInterrupts {
     }
 }
 
-/// Quote words for the remote (POSIX) shell, leaving plain ones bare so the
-/// command also works when the host's shell is cmd.exe or PowerShell.
+/// Quote words for the host's shell. Plain words stay bare and most others
+/// go in double quotes, which POSIX shells, cmd.exe and PowerShell all read
+/// the same way; only words with characters special inside double quotes
+/// to one of them fall back to POSIX single quotes.
 fn shell_join(words: &[String]) -> String {
     words
         .iter()
@@ -223,6 +225,8 @@ fn shell_join(words: &[String]) -> String {
                     .all(|c| c.is_ascii_alphanumeric() || "-_./:=@+,".contains(c));
             if plain {
                 w.clone()
+            } else if !w.chars().any(|c| "\"\\$`%!".contains(c)) {
+                format!("\"{w}\"")
             } else {
                 format!("'{}'", w.replace('\'', "'\\''"))
             }
@@ -246,6 +250,8 @@ fn ssh_output(args: &Args, remote: &[String]) -> Result<(i32, String), String> {
     ))
 }
 
+/// Separate ssh commands rather than `a || b`, which the host's shell may
+/// not understand: Windows OpenSSH runs cmd.exe or PowerShell.
 fn list_sessions(args: &Args) -> Result<Vec<Session>, String> {
     let rterm = args.rterm.clone();
     let (mut code, mut out) = ssh_output(args, &[rterm.clone(), "ls".into(), "--json".into()])?;
@@ -529,6 +535,8 @@ mod tests {
             ]),
             "rterm attach main -e '^\\'"
         );
-        assert_eq!(shell_join(&["it's".into()]), "'it'\\''s'");
+        assert_eq!(shell_join(&["^a".into(), "^]".into()]), "\"^a\" \"^]\"");
+        assert_eq!(shell_join(&["it's".into()]), "\"it's\"");
+        assert_eq!(shell_join(&["$it's".into()]), "'$it'\\''s'");
     }
 }

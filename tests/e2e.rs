@@ -935,6 +935,23 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// The native rterm-connect (Windows) is rterm under another name, and
+/// starts its transfer endpoint as itself.
+#[test]
+fn rterm_connect_name_still_runs_the_transfer_endpoint() {
+    let dir = scratch("connect-name");
+    let exe = dir.join("rterm-connect");
+    std::fs::copy(env!("CARGO_BIN_EXE_rterm"), &exe).unwrap();
+    let help = |args: &[&str]| {
+        let out = Command::new(&exe).args(args).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(help(&["--help"]).contains("Choose an rterm session"));
+    let text = help(&["__transfer-endpoint", "--help"]);
+    assert!(text.contains("--download-dir"), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The computer-side transfer endpoint, as rterm-connect would start it,
 /// but talking to the session directly instead of over ssh.
 fn endpoint(env: &Env, session: &str, downloads: &Path, cwd: &Path, confirm: &str) -> Child {

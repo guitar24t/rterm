@@ -572,7 +572,10 @@ fn get_and_put_through_the_session() {
     let out = in_session(&["get", "notes.txt"]);
     assert!(out.contains("rterm-connect"), "{out}");
 
-    let mut endpoint = Command::new(env!("CARGO_BIN_EXE_rterm"))
+    // Started as rterm-connect.exe starts it: as itself, under that name.
+    let connect = root.join("rterm-connect.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_rterm"), &connect).unwrap();
+    let mut endpoint = Command::new(&connect)
         .args([
             "__transfer-endpoint",
             "--session",

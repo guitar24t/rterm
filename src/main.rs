@@ -353,6 +353,8 @@ fn run(cli: Cli) -> Result<i32> {
 fn main() -> ExitCode {
     // Installed under the name rterm-connect (Windows), act as the session
     // picker; contrib/rterm-connect.py is the same tool for Linux and macOS.
+    // The picker starts its transfer endpoint as itself, so that internal
+    // command still goes to rterm.
     let mut args = std::env::args_os();
     let invoked_as = args
         .next()
@@ -362,8 +364,9 @@ fn main() -> ExitCode {
                 .map(|s| s.to_string_lossy().to_lowercase())
         })
         .unwrap_or_default();
-    if invoked_as == "rterm-connect" {
-        return ExitCode::from(connect::main(args.collect()).clamp(0, 255) as u8);
+    let args: Vec<OsString> = args.collect();
+    if invoked_as == "rterm-connect" && args.first().is_none_or(|a| a != "__transfer-endpoint") {
+        return ExitCode::from(connect::main(args).clamp(0, 255) as u8);
     }
     let cli = Cli::parse();
     match run(cli) {
