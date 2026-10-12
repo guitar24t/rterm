@@ -139,6 +139,26 @@ class HostCommands(unittest.TestCase):
         self.assertEqual(sent, ["rterm ls --json", "rterm ls"])
         self.assertEqual([s.name for s in sessions], ["main"])
 
+    def test_missing_on_a_windows_host_says_how_to_install_there(self):
+        import contextlib
+        import io
+        from unittest import mock
+        sent = []
+        powershell = ("rterm : The term 'rterm' is not recognized as the name of a cmdlet, ...\r\n"
+                      "    + FullyQualifiedErrorId : CommandNotFoundException\r\n")
+
+        def fake_run(cmd, **kw):
+            sent.append(cmd[-1])
+            return rc.subprocess.CompletedProcess(cmd, 1, "", powershell)
+
+        err = io.StringIO()
+        with mock.patch.object(rc.subprocess, "run", fake_run), \
+                contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            rc.list_sessions(self.args())
+        self.assertEqual(sent, ["rterm ls --json"])
+        self.assertIn("winbox runs Windows", err.getvalue())
+        self.assertIn("releases/latest", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,10 +2,11 @@
 # commands in (cmd.exe, Windows PowerShell, PowerShell 7): both session
 # pickers list sessions, a session started over ssh outlives the connection,
 # and `rterm get` / `rterm put` reach the computer through the transfer
-# endpoint rterm-connect.exe starts. This machine is both host and computer.
+# endpoint rterm-connect.exe starts. This machine is both host and computer,
+# with Rob Terminal installed from the MSI as a user would.
 # Needs an administrator (to set up sshd). CI runs it on a throwaway runner.
-# Usage: tests/windows-ssh.ps1 -Binary target/debug/rterm.exe
-param([Parameter(Mandatory)] [string] $Binary)
+# Usage: tests/windows-ssh.ps1 -Msi rterm-<version>-windows-x86_64.msi
+param([Parameter(Mandatory)] [string] $Msi)
 $ErrorActionPreference = 'Continue'
 $PSNativeCommandArgumentPassing = 'Standard'
 $repo = Split-Path $PSScriptRoot
@@ -39,18 +40,19 @@ function Invoke-Native([string] $exe, [string[]] $arguments, [int] $seconds = 60
     [pscustomobject]@{ Code = $p.ExitCode; Text = $out.Result + $err.Result }
 }
 
-# rterm and rterm-connect first on the PATH ssh logins get. (Not the user
-# PATH, where the MSI puts them: the runner has R on the machine PATH, and
-# Windows names are case-insensitive, so R's Rterm.exe would win.)
-$bin = Join-Path $env:RUNNER_TEMP 'rterm-bin'
-New-Item -ItemType Directory -Force $bin | Out-Null
-$rterm = Join-Path $bin 'rterm.exe'
-$connect = Join-Path $bin 'rterm-connect.exe'
-Copy-Item $Binary $rterm
-Copy-Item $Binary $connect
+# Rob Terminal from the MSI: per-user, on the user PATH. R ships an
+# Rterm.exe, Windows names ignore case, and the runner has R on the machine
+# PATH (which comes first), so take R off it; machines without R don't care.
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-[Environment]::SetEnvironmentVariable('Path', "$bin;$machinePath", 'Machine')
-$env:Path = "$bin;$env:Path"
+$withoutR = ($machinePath -split ';' | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'Rterm.exe')) }) -join ';'
+[Environment]::SetEnvironmentVariable('Path', $withoutR, 'Machine')
+$log = Join-Path $env:RUNNER_TEMP 'msiexec.log'
+$p = Start-Process msiexec.exe -ArgumentList @('/i', "`"$Msi`"", '/qn', '/l*v', "`"$log`"") -Wait -PassThru
+if ($p.ExitCode -ne 0) { Get-Content $log -Tail 60; throw "FAILED: installing $Msi ($($p.ExitCode))" }
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\Rob Terminal'
+$rterm = Join-Path $installDir 'rterm.exe'
+$connect = Join-Path $installDir 'rterm-connect.exe'
+Assert (Test-Path $connect) "installed into $installDir"
 
 # An OpenSSH server on localhost that lets this user in with a key.
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
@@ -72,7 +74,7 @@ Write-Host "ssh client: $((Get-Command ssh).Source) $(ssh -V 2>&1)"
 $r = Invoke-Native ssh @('-o', 'BatchMode=yes', 'localhost', 'echo', 'ssh-works')
 Assert ($r.Text -match 'ssh-works') 'ssh to localhost with a key' $r.Text
 $r = Invoke-Native ssh @('localhost', 'rterm --version')
-Assert ($r.Text -match '^rterm \d') 'ssh logins find our rterm' $r.Text
+Assert ($r.Text -match '^rterm \d') 'ssh logins find the installed rterm on the user PATH' $r.Text
 
 function Set-HostShell([string] $shell) {
     $reg = 'HKLM:\SOFTWARE\OpenSSH'
@@ -102,6 +104,10 @@ foreach ($shell in $shells.GetEnumerator()) {
     Assert ($r.Code -eq 0) "rterm-connect.py lists sessions [$label]" $r.Text
     $r = Invoke-Native $connect @('--list', 'localhost')
     Assert ($r.Code -eq 0) "rterm-connect.exe lists sessions [$label]" $r.Text
+    $r = Invoke-Native python @("$repo\contrib\rterm-connect.py", '--list', '--rterm', 'no-such-rterm', 'localhost')
+    Assert ($r.Text -match 'runs Windows: install Rob Terminal') "rterm-connect.py says how to install on a Windows host [$label]" $r.Text
+    $r = Invoke-Native $connect @('--list', '--rterm', 'no-such-rterm', 'localhost')
+    Assert ($r.Text -match 'runs Windows: install Rob Terminal') "rterm-connect.exe says how to install on a Windows host [$label]" $r.Text
 
     # A session started over ssh keeps running after ssh disconnects.
     $r = Invoke-Native ssh @('localhost', "rterm new -d $name")

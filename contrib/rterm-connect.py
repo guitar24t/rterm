@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Callable, List, NoReturn, Optional, Tuple
 
 INSTALL_HINT = "curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh"
+WINDOWS_INSTALL = "https://github.com/guitar24t/rterm/releases/latest"
 NAME_RE = re.compile(r"^(?![.-])[A-Za-z0-9._@+-]{1,64}\Z")
 DEFAULT_NAME = "main"
 
@@ -159,35 +160,48 @@ def rterm(args: argparse.Namespace, *argv: str) -> str:
     return " ".join(host_quote(a) for a in (args.rterm, *argv))
 
 
-def run_remote(args: argparse.Namespace, remote: str, quiet: bool) -> subprocess.CompletedProcess:
+def run_remote(args: argparse.Namespace, remote: str) -> subprocess.CompletedProcess:
+    # Capturing stderr hides no prompts: ssh asks for passwords on the
+    # terminal (or Windows console) directly.
     try:
         return subprocess.run(
             ssh_command(args, remote, tty=False),
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE if quiet else None, text=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace",
         )
     except OSError as e:
         fail(f"can't run ssh: {e}")
 
 
+def windows_not_found(stderr: str) -> bool:
+    """Whether cmd.exe or PowerShell said the command doesn't exist."""
+    return "is not recognized as" in stderr or "CommandNotFoundException" in stderr
+
+
 def list_sessions(args: argparse.Namespace) -> List[Session]:
     # Separate ssh commands rather than `a 2>/dev/null || b`, which the
     # host's shell may not understand: Windows OpenSSH runs cmd.exe or
-    # PowerShell. (ssh asks for passwords on the terminal, not stderr.)
-    result = run_remote(args, rterm(args, "ls", "--json"), quiet=True)
-    if result.returncode in (127, 255):
-        sys.stderr.write(result.stderr)
-    elif result.returncode != 0:
+    # PowerShell.
+    result = run_remote(args, rterm(args, "ls", "--json"))
+    if result.returncode not in (0, 127, 255) and not windows_not_found(result.stderr):
         # Hosts running rterm 0.1.0 don't know --json; fall back to the table.
-        result = run_remote(args, rterm(args, "ls"), quiet=False)
+        result = run_remote(args, rterm(args, "ls"))
+    host = args.host
+    if result.returncode == 0:
+        return parse_listing(result.stdout)
     if result.returncode == 127:
-        fail(f"rterm is not installed on {args.host} (or not on its PATH; see --rterm).\n"
+        fail(f"rterm is not installed on {host} (or not on its PATH; see --rterm).\n"
              f"Install it there with:\n  {INSTALL_HINT}")
+    if windows_not_found(result.stderr):
+        fail(f"rterm is not installed on {host} for the account you log in as "
+             f"(or not on its PATH; see --rterm).\n"
+             f"{host} runs Windows: install Rob Terminal there from the MSI at\n"
+             f"  {WINDOWS_INSTALL}\n"
+             f"signed in to Windows as that account (the installer is per-user).")
+    sys.stderr.write(result.stderr)
     if result.returncode == 255:
-        fail(f"ssh to {args.host} failed")
-    if result.returncode != 0:
-        fail(f"listing sessions on {args.host} failed (exit {result.returncode})")
-    return parse_listing(result.stdout)
+        fail(f"ssh to {host} failed")
+    fail(f"listing sessions on {host} failed (exit {result.returncode})")
 
 
 def parse_listing(text: str) -> List[Session]:

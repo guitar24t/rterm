@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 use clap::Parser;
 
 const INSTALL_HINT: &str = "curl -fsSL https://guitar24t.github.io/rterm/install.sh | sudo sh";
+const WINDOWS_INSTALL: &str = "https://github.com/guitar24t/rterm/releases/latest";
 const DEFAULT_NAME: &str = "main";
 
 #[derive(Parser)]
@@ -235,42 +236,61 @@ fn shell_join(words: &[String]) -> String {
         .join(" ")
 }
 
-fn ssh_output(args: &Args, remote: &[String]) -> Result<(i32, String), String> {
+fn ssh_output(args: &Args, remote: &[String]) -> Result<(i32, String, String), String> {
+    // Capturing stderr hides no prompts: ssh asks for passwords on the
+    // console (Windows) or terminal (Unix) directly.
     let out = Command::new("ssh")
         .args(&args.ssh_args)
         .arg(&args.host)
         .arg(shell_join(remote))
         .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
         .output()
         .map_err(|e| format!("can't run ssh: {e}"))?;
     Ok((
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
     ))
+}
+
+/// Whether cmd.exe or PowerShell said the command doesn't exist.
+fn windows_not_found(stderr: &str) -> bool {
+    stderr.contains("is not recognized as") || stderr.contains("CommandNotFoundException")
 }
 
 /// Separate ssh commands rather than `a || b`, which the host's shell may
 /// not understand: Windows OpenSSH runs cmd.exe or PowerShell.
 fn list_sessions(args: &Args) -> Result<Vec<Session>, String> {
     let rterm = args.rterm.clone();
-    let (mut code, mut out) = ssh_output(args, &[rterm.clone(), "ls".into(), "--json".into()])?;
-    if code != 0 && code != 127 && code != 255 {
+    let (mut code, mut out, mut err) =
+        ssh_output(args, &[rterm.clone(), "ls".into(), "--json".into()])?;
+    if ![0, 127, 255].contains(&code) && !windows_not_found(&err) {
         // rterm 0.1.0 doesn't know --json; read its table instead.
-        (code, out) = ssh_output(args, &[rterm, "ls".into()])?;
+        (code, out, err) = ssh_output(args, &[rterm, "ls".into()])?;
     }
+    let host = &args.host;
+    if code == 0 {
+        return Ok(parse_listing(&out));
+    }
+    if code == 127 {
+        return Err(format!(
+            "rterm is not installed on {host} (or not on its PATH; see --rterm).\n\
+             Install it there with:\n  {INSTALL_HINT}"
+        ));
+    }
+    if windows_not_found(&err) {
+        return Err(format!(
+            "rterm is not installed on {host} for the account you log in as (or not on \
+             its PATH; see --rterm).\n\
+             {host} runs Windows: install Rob Terminal there from the MSI at\n  \
+             {WINDOWS_INSTALL}\n\
+             signed in to Windows as that account (the installer is per-user)."
+        ));
+    }
+    eprint!("{err}");
     match code {
-        0 => Ok(parse_listing(&out)),
-        127 => Err(format!(
-            "rterm is not installed on {} (or not on its PATH; see --rterm).\n\
-             Install it there with:\n  {INSTALL_HINT}",
-            args.host
-        )),
-        255 => Err(format!("ssh to {} failed", args.host)),
-        c => Err(format!(
-            "listing sessions on {} failed (exit {c})",
-            args.host
-        )),
+        255 => Err(format!("ssh to {host} failed")),
+        c => Err(format!("listing sessions on {host} failed (exit {c})")),
     }
 }
 
@@ -537,6 +557,20 @@ mod tests {
         );
         assert_eq!(shell_join(&["^a".into(), "^]".into()]), "\"^a\" \"^]\"");
         assert_eq!(shell_join(&["it's".into()]), "\"it's\"");
+    }
+
+    #[test]
+    fn recognizes_missing_commands_on_windows_hosts() {
+        let cmd = "'rterm' is not recognized as an internal or external command,\r\n\
+                   operable program or batch file.\r\n";
+        let powershell = "rterm : The term 'rterm' is not recognized as the name of a cmdlet, \
+                          ...\r\n    + CategoryInfo          : ObjectNotFound: (rterm:String) [], \
+                          CommandNotFoundException\r\n";
+        assert!(windows_not_found(cmd));
+        assert!(windows_not_found(powershell));
+        assert!(!windows_not_found(
+            "bash: line 1: rterm: command not found\n"
+        ));
         assert_eq!(shell_join(&["$it's".into()]), "'$it'\\''s'");
     }
 }
